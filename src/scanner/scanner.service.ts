@@ -37,9 +37,9 @@ export class ScannerService implements OnApplicationBootstrap {
     this.logger.log('Scanner active: Instant alerts reserved for Breakouts & Exits. Accumulation reported daily at 20:00.');
   }
 
-  @Cron('0 */30 * * * *')
+  @Cron('0 */15 * * * *')
   async refreshSymbols() {
-    this.symbols = await this.binanceService.getUsdtFuturesSymbols();
+    this.symbols = await this.binanceService.getActiveSymbolsByVolume();
   }
 
   // BÁO CÁO TÍCH LŨY TỔNG HỢP CUỐI NGÀY LÚC 20:00 (8 TỐI GỬI 1 LẦN DUY NHẤT)
@@ -56,7 +56,7 @@ export class ScannerService implements OnApplicationBootstrap {
     }
   }
 
-  @Cron('*/6 * * * * *') // Quet moi 6 giay
+  @Cron('*/30 * * * * *') // Quet moi 30 giay
   async handleScanTick() {
     if (this.isScanning) {
       return;
