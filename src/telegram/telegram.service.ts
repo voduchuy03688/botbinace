@@ -2,17 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-export interface OrderflowAlertPayload {
+export interface EliteAlertPayload {
   symbol: string;
-  patternType:
-    | 'NET_INFLOW_PUMP'       // Dòng tiền mua dồn dập + Giá vừa bứt phá từ nền -> ĐẦU SÓNG TĂNG
-    | 'ACCUMULATION_DIP'     // Giá đi ngang tích lũy dưới đáy nhưng Dòng tiền mua gom âm thầm -> ĐẦU SÓNG TÍCH LŨY
-    | 'DISTRIBUTION_TRAP'    // Giá đẩy nhẹ nhưng Dòng tiền bán xả chèn ép -> BẪY TĂNG GIẢ
-    | 'NET_OUTFLOW_DUMP'     // Dòng tiền bán tháo tháo chạy -> ĐẦU SÓNG GIẢM
-    | 'EXIT_TAKE_PROFIT';    // Dòng tiền mua kiệt sức -> CHỐT LỜI
-
-  wavePhase: 'EARLY_BASE' | 'MID_LATE_WAVE'; // Trạng thái vị thế sóng
-
+  type: 'BAT_DAY_TICH_LUY' | 'DAU_CHAN_SONG_BANG_NO';
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
@@ -29,14 +21,12 @@ export interface OrderflowAlertPayload {
   takerBuyPct: number;           // Tỷ lệ % Mua chủ động
   
   volatilitySurgeRatio: number;
-  forecastScore: number;         // 0 - 100 điểm tin cậy
-  forecastLabel: string;         // Nhãn dự đoán tiếng Việt
+  forecastScore: number;         // 85 - 100 điểm tin cậy cực cao
 
-  suggestedTp1?: number;
-  suggestedTp2?: number;
-  suggestedSl?: number;
+  suggestedTp1: number;
+  suggestedTp2: number;
+  suggestedSl: number;
   change1hPct?: number;
-  reasonText?: string;
 }
 
 @Injectable()
@@ -112,84 +102,42 @@ export class TelegramService {
     }
   }
 
-  async sendOrderflowAlert(payload: OrderflowAlertPayload): Promise<boolean> {
-    let header = '';
-    let patternNote = '';
+  async sendEliteAlert(payload: EliteAlertPayload): Promise<boolean> {
+    const isBatDay = payload.type === 'BAT_DAY_TICH_LUY';
 
-    switch (payload.patternType) {
-      case 'NET_INFLOW_PUMP':
-        header = '🟢 🚀 <b>[DÒNG TIỀN VƯA ĐỔ VÀO - BẮT ĐẦU CHÂN SÓNG TĂNG]</b>';
-        patternNote = '🔥 <i>Dòng tiền ròng Mua đột biến bứt phá từ nền phẳng, vị thế vào lệnh chuẩn ngay đầu chân sóng!</i>';
-        break;
-      case 'ACCUMULATION_DIP':
-        header = '🟢 💎 <b>[TÍCH LŨY DƯỚI ĐÁY - CÁ MẠP ÂM THẦM DỒN TIỀN MUA]</b>';
-        patternNote = '💡 <i>Giá đang nén đi ngang nhưng Volume Mua Taker gom cực mạnh $\\rightarrow$ Chuẩn bị bùng nổ đầu sóng!</i>';
-        break;
-      case 'DISTRIBUTION_TRAP':
-        header = '⚠️ 🔴 <b>[CẢNH BÁO BẪY TĂNG GIẢ - DÒNG TIỀN ĐANG XẢ HÀNG]</b>';
-        patternNote = '🚨 <i>Giá đẩy nhích nhưng Lực Bán Taker xả chèn ép $\\rightarrow$ Bẫy dụ nhỏ lẻ, tuyệt đối không đu đỉnh!</i>';
-        break;
-      case 'NET_OUTFLOW_DUMP':
-        header = '🔴 🔻 <b>[DÒNG TIỀN BÁN XẢ THÁO - BẮT ĐẦU CHÂN SÓNG GIẢM]</b>';
-        patternNote = '💥 <i>Lực Bán Taker xả tháo ạt từ đỉnh nền, vị thế SHORT chuẩn ngay đầu sóng giảm!</i>';
-        break;
-      case 'EXIT_TAKE_PROFIT':
-        header = '💰 🌟 <b>[DÒNG TIỀN MUA KIỆT SỨC - KHUYẾN NGHỊ CHỐT LỜI]</b>';
-        patternNote = '💡 <i>Lực Mua dừng lại và Lực Bán gia tăng $\\rightarrow$ Hãy chốt lời hoặc dời SL bảo vệ lợi nhuận!</i>';
-        break;
-    }
+    const header = isBatDay
+      ? '💎 🟢 <b>[TÍN HIỆU CỰC NGON: BẮT ĐÁY TÍCH LŨY]</b>'
+      : '🚀 🟢 <b>[TÍN HIỆU CỰC NGON: BẮT ĐẦU CHÂN SÓNG]</b>';
 
-    const phaseTag = payload.wavePhase === 'EARLY_BASE'
-      ? '🌱 <b>[VỊ THẾ: ĐẦU CHÂN SÓNG - AN TOÀN CAO]</b>'
-      : '⚠️ <b>[VỊ THẾ: SÓNG ĐÃ CHẠY DÀI - CẨN TRỌNG ĐU ĐỈNH]</b>';
-
-    const netCashflowStr = payload.netCashflow >= 0
-      ? `+${Math.round(payload.netCashflow).toLocaleString()} USDT (DÒNG TIỀN VÀO 🟢)`
-      : `${Math.round(payload.netCashflow).toLocaleString()} USDT (DÒNG TIỀN RÚT 🔴)`;
+    const note = isBatDay
+      ? '💡 <i>Giá nén dưới đáy nhưng Cá mập dồn tiền mua ròng ạt $\\rightarrow$ Đỉnh cao bắt đáy!</i>'
+      : '🔥 <i>Nổ nến đầu tiên bứt phá từ nền phẳng, vị thế vào lệnh ngay chân sóng!</i>';
 
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
       header,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      phaseTag,
-      `🎯 <b>DỰ ĐOÁN XÁC SUẤT:</b> <code>${payload.forecastLabel}</code> (Độ tin cậy: <b>${payload.forecastScore}/100</b>)`,
-      patternNote,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (Tín hiệu hàng đầu)`,
+      note,
       `----------------------------------------`,
-      `📊 <b>PHÂN TÍCH DÒNG TIỀN ĐỘT BIẾN (1 PHÚT):</b>`,
-      `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>${netCashflowStr}</code>`,
-      `• <b>Volume Mua Chủ Động (Taker Buy):</b> <code>${Math.round(payload.takerBuyVol).toLocaleString()} USDT</code> (<b>${payload.takerBuyPct.toFixed(1)}%</b>)`,
-      `• <b>Volume Bán Chủ Động (Taker Sell):</b> <code>${Math.round(payload.takerSellVol).toLocaleString()} USDT</code> (<b>${(100 - payload.takerBuyPct).toFixed(1)}%</b>)`,
+      `📊 <b>DÒNG TIỀN MUA TAKER (1 PHÚT):</b>`,
+      `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>+${Math.round(payload.netCashflow).toLocaleString()} USDT</code> 🟢`,
+      `• <b>Lực Mua Chủ Động:</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
       `• <b>Tổng Volume 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
       `----------------------------------------`,
-      `📈 <b>BIẾN ĐỘNG GIÁ & XU HƯỚNG:</b>`,
-      `• <b>Nến 1 phút:</b> <code>${payload.priceChangePct >= 0 ? '+' : ''}${payload.priceChangePct.toFixed(2)}%</code> (Nổ biên độ <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b>)`,
+      `📈 <b>GIÁ VÀ MỤC TIÊU VÀO LỆNH:</b>`,
+      `• <b>Giá Entry Hiện Tại:</b> <code>$${payload.currentPrice}</code>`,
       payload.change1hPct !== undefined ? `• <b>Xu hướng 1 giờ:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
-      `• <b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code> (Mở: <code>$${payload.openPrice}</code> | Cao nhất: <code>$${payload.highPrice}</code> | Thấp nhất: <code>$${payload.lowPrice}</code>)`,
-    ];
-
-    if (payload.patternType !== 'EXIT_TAKE_PROFIT' && payload.suggestedTp1 && payload.suggestedSl) {
-      lines.push(
-        `----------------------------------------`,
-        `🎯 <b>KHUYẾN NGHỊ VÀO LỆNH & QUẢN TRỊ RỦI RO:</b>`,
-        `• <b>Mục tiêu Chốt lời 1 (TP1 +3%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code>`,
-        payload.suggestedTp2 ? `• <b>Mục tiêu Chốt lời 2 (TP2 +6%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code>` : '',
-        `• <b>Mức Cắt lỗ (SL -1.5%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
-      );
-    }
-
-    if (payload.reasonText) {
-      lines.push(
-        `----------------------------------------`,
-        `💡 <b>Chi tiết lý do:</b> <i>${payload.reasonText}</i>`,
-      );
-    }
-
-    lines.push(
       `----------------------------------------`,
-      `⏰ <i>Thời gian: ${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Giao dịch ngay trên Binance Futures</a>`,
-    );
+      `🎯 <b>GỢI Ý QUẢN TRỊ LỆNH:</b>`,
+      `• <b>Chốt lời TP1 (+3%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code>`,
+      `• <b>Chốt lời TP2 (+6%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code>`,
+      `• <b>Cắt lỗ SL (-1.5%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+      `----------------------------------------`,
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế Ngay Trên Binance Futures</a>`,
+    ];
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));
   }
