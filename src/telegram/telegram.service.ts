@@ -4,7 +4,7 @@ import axios from 'axios';
 
 export interface TieredAlertPayload {
   symbol: string;
-  patternType: 'TICH_LUY' | 'CHAN_SONG' | 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT';
+  patternType: 'CHAN_SONG' | 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT';
   qualityTier?: 'CUC_KI_NGON' | 'NGON';
   
   priceChangePct: number;
@@ -30,6 +30,15 @@ export interface TieredAlertPayload {
   suggestedSl?: number;
   change1hPct?: number;
   reasonText?: string;
+}
+
+export interface AccumulationReportItem {
+  symbol: string;
+  netCashflow: number;
+  takerBuyPct: number;
+  currentPrice: number;
+  forecastScore: number;
+  detectedTime: string;
 }
 
 @Injectable()
@@ -107,7 +116,6 @@ export class TelegramService {
 
   async sendTieredAlert(payload: TieredAlertPayload): Promise<boolean> {
     const isCucKiNgon = payload.qualityTier === 'CUC_KI_NGON';
-    const isTichLuy = payload.patternType === 'TICH_LUY';
     const isHetNgon = payload.patternType === 'HET_NGON_STAGNANT' || payload.patternType === 'HET_NGON_SELL_OUT';
 
     let header = '';
@@ -119,14 +127,6 @@ export class TelegramService {
     } else if (payload.patternType === 'HET_NGON_SELL_OUT') {
       header = '💰 🔴 <b>[THÔNG BÁO: HẾT NGON - CÁ MẠP BÁN XẢ / CHỐT LỜI LẬP TỨC]</b>';
       analysisNote = '🚨 <i>Phân tích: Lực Bán Taker xả tháo mạnh hoặc giá rút chân khỏi đỉnh $\\rightarrow$ CHỐT LỜI NGAY HOẶC HỦY THEO DÕI, KHÔNG VÀO NỮA!</i>';
-    } else if (isTichLuy) {
-      if (isCucKiNgon) {
-        header = '💎 🔥 🟢 <b>[CỰC KÌ NGON: TÍCH LŨY CÁ MẠP DỒN TIỀN MUA (WIN RATE >= 90%)]</b>';
-        analysisNote = '💡 <i>Phân tích: Giá đi ngang nén chặt dưới đáy nhưng Cá mập dồn dòng tiền Mua Taker khổng lồ $\\rightarrow$ Chuẩn bị bùng nổ chân sóng!</i>';
-      } else {
-        header = '💎 ⚡ 🟢 <b>[TÍN HIỆU NGON: TÍCH LŨY GOM HÀNG CHUẨN ĐÁY]</b>';
-        analysisNote = '💡 <i>Phân tích: Lực Mua gom âm thầm áp đảo phe bán tại vùng hỗ trợ $\\rightarrow$ Vị thế gom hàng an toàn!</i>';
-      }
     } else {
       if (isCucKiNgon) {
         header = '🚀 🔥 🟢 <b>[CỰC KÌ NGON: BẮT ĐẦU CHÂN SÓNG TĂNG (WIN RATE >= 90%)]</b>';
@@ -181,5 +181,33 @@ export class TelegramService {
     );
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));
+  }
+
+  async sendDailyAccumulationReport(items: AccumulationReportItem[]): Promise<boolean> {
+    if (items.length === 0) return false;
+
+    const lines: string[] = [
+      '💎 📊 <b>[BÁO CÁO TÍCH LŨY TỔNG HỢP CUỐI NGÀY - XẾP HẠNG CÁ MẠP GOM HÀNG]</b>',
+      `💡 <i>Danh sách các coin được Cá mập âm thầm gom mua dưới đáy nhiều nhất trong ngày, xếp hạng theo Tỷ lệ Mua & Dòng tiền ròng:</i>`,
+      `----------------------------------------`,
+    ];
+
+    items.forEach((item, index) => {
+      const binanceUrl = `https://www.binance.com/en/futures/${item.symbol}`;
+      lines.push(
+        `<b>#${index + 1}. <a href="${binanceUrl}">${item.symbol}</a></b>`,
+        `• <b>Dòng Tiền Ròng Mua:</b> <code>+${Math.round(item.netCashflow).toLocaleString()} USDT</code> 🟢`,
+        `• <b>Tỷ Lệ Mua Taker:</b> <code>${item.takerBuyPct.toFixed(1)}%</code> | <b>Điểm:</b> <code>${item.forecastScore}/100</code>`,
+        `• <b>Giá Hiện Tại:</b> <code>$${item.currentPrice}</code>`,
+        ``,
+      );
+    });
+
+    lines.push(
+      `----------------------------------------`,
+      `⏰ <i>Thời gian lập báo cáo: ${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+    );
+
+    return this.sendMessage(lines.join('\n'));
   }
 }

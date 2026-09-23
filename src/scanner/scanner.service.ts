@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { BinanceService } from '../binance/binance.service.js';
-import { TelegramService, TieredAlertPayload } from '../telegram/telegram.service.js';
+import { TelegramService, TieredAlertPayload, AccumulationReportItem } from '../telegram/telegram.service.js';
 
 interface ActivePositionTrack {
   symbol: string;
@@ -19,6 +19,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
   private symbols: string[] = [];
   private activePositions: Map<string, ActivePositionTrack> = new Map();
+  private dailyAccumulations: Map<string, AccumulationReportItem> = new Map();
   private symbolCooldowns: Map<string, number> = new Map();
   private lastGlobalAlertTime = 0;
 
@@ -31,14 +32,28 @@ export class ScannerService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khoi tao Scanner theo doi HET NGON & CHOT LOI...');
+    this.logger.log('Khoi tao Scanner (Bao Cao Tich Luy Cuoi Ngay & Thong Bao Chan Song Realtime)...');
     await this.refreshSymbols();
-    this.logger.log('Scanner active: Signal entries + Invalidation tracking');
+    this.logger.log('Scanner active: Instant alerts reserved for Breakouts & Exits. Accumulation reported daily at 20:00.');
   }
 
   @Cron('0 */30 * * * *')
   async refreshSymbols() {
     this.symbols = await this.binanceService.getUsdtFuturesSymbols();
+  }
+
+  // BÁO CÁO TÍCH LŨY TỔNG HỢP CUỐI NGÀY LÚC 20:00 (8 TỐI GỬI 1 LẦN DUY NHẤT)
+  @Cron('0 20 * * *')
+  async sendDailyAccumulationReport() {
+    this.logger.log('Dang gui Bao cao Tich luy Tong hop Cuoi ngay...');
+    const items = Array.from(this.dailyAccumulations.values())
+      .sort((a, b) => b.netCashflow - a.netCashflow)
+      .slice(0, 10); // Lay Top 10 coin tich luy manh nhat
+
+    if (items.length > 0) {
+      await this.telegramService.sendDailyAccumulationReport(items);
+      this.dailyAccumulations.clear(); // Reset cho ngay moi
+    }
   }
 
   @Cron('*/6 * * * * *') // Quet moi 6 giay
@@ -114,7 +129,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const isQuietBase = avgCandleRangePct <= 1.25;
 
-    // --- 3. KIỂM TRA HẾT NGON CHO CÁC COIN ĐÃ THÔNG BÁO ---
+    // --- 3. KIỂM TRA HẾT NGON CHO CÁC COIN ĐÃ THÔNG BÁO REALTIME ---
     const trackedPos = this.activePositions.get(symbol);
     if (trackedPos) {
       if (currentPrice > trackedPos.highestPrice) trackedPos.highestPrice = currentPrice;
@@ -123,7 +138,7 @@ export class ScannerService implements OnApplicationBootstrap {
       const timeInPos = now - trackedPos.entryTime;
       const lastExitAlert = trackedPos.lastExitAlertTime || 0;
 
-      if (now - lastExitAlert > 3 * 60 * 1000) { // Cooldown 3 phut giua cac thong bao het ngon
+      if (now - lastExitAlert > 3 * 60 * 1000) {
         const dropFromPeakPct = ((trackedPos.highestPrice - currentPrice) / trackedPos.highestPrice) * 100;
         const totalProfitPct = ((currentPrice - trackedPos.entryPrice) / trackedPos.entryPrice) * 100;
 
@@ -131,7 +146,6 @@ export class ScannerService implements OnApplicationBootstrap {
         let hetNgonPattern: 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT' = 'HET_NGON_STAGNANT';
         let reasonText = '';
 
-        // Kịch bản A: Lực bán Taker xả mạnh hoặc Giá quay đầu rơi từ đỉnh >= 1.5%
         if (takerBuyPct <= 38 && volumeMultiplier >= 1.8) {
           isHetNgon = true;
           hetNgonPattern = 'HET_NGON_SELL_OUT';
@@ -140,9 +154,7 @@ export class ScannerService implements OnApplicationBootstrap {
           isHetNgon = true;
           hetNgonPattern = 'HET_NGON_SELL_OUT';
           reasonText = `Giá đã quay đầu giảm -${dropFromPeakPct.toFixed(2)}% từ đỉnh ($${trackedPos.highestPrice}) $\\rightarrow$ Chốt lời ngay!`;
-        }
-        // Kịch bản B: Đi ngang kiệt sức sau 10-15 phút mà không tăng nổi (+0.3%)
-        else if (timeInPos >= 10 * 60 * 1000 && totalProfitPct <= 0.3) {
+        } else if (timeInPos >= 10 * 60 * 1000 && totalProfitPct <= 0.3) {
           isHetNgon = true;
           hetNgonPattern = 'HET_NGON_STAGNANT';
           reasonText = `Tín hiệu bị trơ, giá đi ngang nén đứng yên sau 10 phút $\\rightarrow$ Hủy theo dõi!`;
@@ -151,7 +163,7 @@ export class ScannerService implements OnApplicationBootstrap {
         if (isHetNgon) {
           trackedPos.lastExitAlertTime = now;
           if (hetNgonPattern === 'HET_NGON_STAGNANT') {
-            this.activePositions.delete(symbol); // Xoa khoi danh sach theo doi
+            this.activePositions.delete(symbol);
           }
 
           const payload: TieredAlertPayload = {
@@ -182,7 +194,23 @@ export class ScannerService implements OnApplicationBootstrap {
       }
     }
 
-    // --- 4. KIỂM TRA TÍN HIỆU ENTRY MỚI (NGON & CỰC KÌ NGON) ---
+    // --- 4. PHÂN TÍCH TÍCH LŨY ÂM THẦM DƯỚI ĐÁY (LƯU VÀO BÁO CÁO TỔNG HỢP CUỐI NGÀY - KHÔNG BẮN KHÔNG GÂY RÁC TELEGRAM) ---
+    const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
+    if (net1mChangePct >= -1.0 && net1mChangePct <= 0.8 && takerBuyPct >= 70 && netCashflow >= 40000 && isQuietBase) {
+      const existing = this.dailyAccumulations.get(symbol);
+      if (!existing || netCashflow > existing.netCashflow) {
+        this.dailyAccumulations.set(symbol, {
+          symbol,
+          netCashflow,
+          takerBuyPct,
+          currentPrice,
+          forecastScore: Math.min(100, Math.round(55 + (takerBuyPct - 50) + (netCashflow / 100000) * 10)),
+          detectedTime: new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }),
+        });
+      }
+    }
+
+    // --- 5. BẮT ĐẦU CHÂN SÓNG TĂNG (BẮN TÍN HIỆU NGAY LẬP TỨC REALTIME) ---
     const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastSymbolAlert < 10 * 60 * 1000) return;
     if (now - this.lastGlobalAlertTime < 15 * 1000) return;
@@ -190,32 +218,18 @@ export class ScannerService implements OnApplicationBootstrap {
     const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
     const closePumpPct = ((currentPrice - openPrice) / openPrice) * 100;
     const pumpSpikePct = Math.max(maxPumpPct, closePumpPct);
-    const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
 
-    // CHẶN ENTRY NẾU SÓNG ĐÃ CHẠY > 9%: Tránh đu đỉnh
-    if (change1hPct !== undefined && change1hPct >= 9.0) return;
+    if (change1hPct !== undefined && change1hPct >= 9.0) return; // Tranh du dinh
 
-    let patternType: 'TICH_LUY' | 'CHAN_SONG' | null = null;
+    let patternType: 'CHAN_SONG' | null = null;
     let qualityTier: 'CUC_KI_NGON' | 'NGON' | null = null;
 
-    // A. BẮT ĐẦU CHÂN SÓNG TĂNG (CHAN_SONG)
     if (pumpSpikePct >= 1.5 && takerBuyPct >= 78 && netCashflow >= 100000 && takerBuyAcceleration >= 4.5 && isQuietBase) {
       patternType = 'CHAN_SONG';
       qualityTier = 'CUC_KI_NGON';
     } else if (pumpSpikePct >= 1.4 && takerBuyPct >= 70 && netCashflow >= 50000 && takerBuyAcceleration >= 3.0 && isQuietBase) {
       patternType = 'CHAN_SONG';
       qualityTier = 'NGON';
-    }
-
-    // B. TÍCH LŨY DƯỚI ĐÁY (TICH_LUY)
-    if (!patternType) {
-      if (net1mChangePct >= -0.8 && net1mChangePct <= 0.6 && takerBuyPct >= 80 && netCashflow >= 80000 && takerBuyAcceleration >= 3.5 && isQuietBase) {
-        patternType = 'TICH_LUY';
-        qualityTier = 'CUC_KI_NGON';
-      } else if (net1mChangePct >= -1.0 && net1mChangePct <= 0.8 && takerBuyPct >= 72 && netCashflow >= 45000 && takerBuyAcceleration >= 2.5 && isQuietBase) {
-        patternType = 'TICH_LUY';
-        qualityTier = 'NGON';
-      }
     }
 
     if (patternType && qualityTier) {
@@ -230,7 +244,7 @@ export class ScannerService implements OnApplicationBootstrap {
         qualityTier = 'NGON';
       }
 
-      if (forecastScore < 82) return; // Loại bỏ tất cả tín hiệu < 82 điểm
+      if (forecastScore < 82) return;
 
       this.symbolCooldowns.set(symbol, now);
       this.lastGlobalAlertTime = now;
@@ -271,7 +285,7 @@ export class ScannerService implements OnApplicationBootstrap {
       };
 
       this.logger.warn(
-        `🚀 [${patternType} - ${qualityTier}] ${symbol} -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
+        `🚀 [CHAN SONG - ${qualityTier}] ${symbol} -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
       );
 
       await this.telegramService.sendTieredAlert(payload);
