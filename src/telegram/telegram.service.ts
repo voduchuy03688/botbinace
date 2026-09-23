@@ -2,10 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-export interface SpikeAlertPayload {
+export interface CashflowAlertPayload {
   symbol: string;
-  direction: 'PUMP' | 'DUMP';
-  type: 'EARLY_WAVE_BREAKOUT' | 'CONTINUOUS_WAVE' | 'VOLUME_SURGE';
+  action: 'ENTRY_BUY' | 'ENTRY_SELL' | 'EXIT_TAKE_PROFIT' | 'EXIT_STOP_WARNING';
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
@@ -15,10 +14,14 @@ export interface SpikeAlertPayload {
   avgVolume: number;
   volumeMultiplier: number;
   volatilitySurgeRatio: number;
-  forecastScore: number;       // 0 - 100
-  forecastLabel: string;        // e.g. "BẮT ĐẦU SÓNG TĂNG CỰC MẠNH"
+  forecastScore: number;         // 0 - 100
+  forecastLabel: string;          // e.g. "BẮT ĐẦU NGỌN SÓNG (ENTRY ĐẦU SÓNG)"
+  suggestedTp1?: number;
+  suggestedTp2?: number;
+  suggestedSl?: number;
   change1hPct?: number;
   takerBuyRatio?: number;
+  reasonText?: string;
 }
 
 @Injectable()
@@ -94,46 +97,62 @@ export class TelegramService {
     }
   }
 
-  async sendSpikeAlert(payload: SpikeAlertPayload): Promise<boolean> {
-    const isPump = payload.direction === 'PUMP';
-
-    // Distinct Header & Emojis based on direction
-    let header = '';
-    if (isPump) {
-      header = payload.type === 'CONTINUOUS_WAVE'
-        ? '🚀 🟢 <b>[SÓNG TĂNG LIÊN TỤC] CONTINUOUS PUMP</b>'
-        : '🟢 🌊 <b>[TĂNG - BẮT ĐẦU CON SÓNG] BULLISH BREAKOUT</b>';
-    } else {
-      header = payload.type === 'CONTINUOUS_WAVE'
-        ? '🔻 🔴 <b>[SÓNG GIẢM LIÊN TỤC] CONTINUOUS DUMP</b>'
-        : '🔴 ⚠️ <b>[GIẢM - XẢ SẢNH / ĐẦU SÓNG GIẢM] BEARISH BREAKDOWN</b>';
-    }
-
-    const directionEmoji = isPump ? '📈' : '📉';
-    const arrowSymbol = isPump ? '▲ +' : '▼ ';
+  async sendCashflowAlert(payload: CashflowAlertPayload): Promise<boolean> {
+    const isEntryBuy = payload.action === 'ENTRY_BUY';
+    const isExit = payload.action === 'EXIT_TAKE_PROFIT' || payload.action === 'EXIT_STOP_WARNING';
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
-    const takerBuyStr = payload.takerBuyRatio !== undefined
-      ? isPump
-        ? `<b>Phe Mua Áp Đảo (Taker Buy):</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code>`
-        : `<b>Phe Bán Áp Đảo (Taker Sell):</b> <code>${((1 - payload.takerBuyRatio) * 100).toFixed(1)}%</code>`
+    let header = '';
+    if (payload.action === 'ENTRY_BUY') {
+      header = '💵 🟢 <b>[DÒNG TIỀN VÀO MẠNH - CƠ HỘI VÀO ĐẦU SÓNG]</b>';
+    } else if (payload.action === 'ENTRY_SELL') {
+      header = '🔴 📉 <b>[DÒNG TIỀN BÁN THOÁT - CƠ HỘI SHORT ĐẦU SÓNG GIẢM]</b>';
+    } else if (payload.action === 'EXIT_TAKE_PROFIT') {
+      header = '💰 🌟 <b>[DÒNG TIỀN THOÁT RA - CẢNH BÁO CHỐT LỜI/EXIT]</b>';
+    } else {
+      header = '⚠️ 🔴 <b>[DÒNG TIỀN KIỆT SỨC - NÊN THOÁT LỆNH/DỜI SL]</b>';
+    }
+
+    const directionEmoji = isEntryBuy ? '📈' : '📉';
+    const takerStr = payload.takerBuyRatio !== undefined
+      ? isEntryBuy
+        ? `<b>Tỷ lệ Mua chủ động:</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code> 🟢`
+        : `<b>Tỷ lệ Bán chủ động:</b> <code>${((1 - payload.takerBuyRatio) * 100).toFixed(1)}%</code> 🔴`
       : '';
 
-    const message = [
+    const lines: string[] = [
       header,
       `<b>Symbol:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>DỰ ĐOÁN:</b> <code>${payload.forecastLabel}</code> (Đánh giá: <b>${payload.forecastScore}/100</b>)`,
-      `<b>Nến 1m Biến động:</b> <code>${arrowSymbol}${payload.priceChangePct.toFixed(2)}%</code> ${directionEmoji} (Gấp <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b> so với nền)`,
+      `🎯 <b>DỰ ĐOÁN XÁC SUẤT:</b> <code>${payload.forecastLabel}</code> (Độ tin cậy: <b>${payload.forecastScore}/100</b>)`,
+      `<b>Nến 1m Biến động:</b> <code>${payload.priceChangePct >= 0 ? '+' : ''}${payload.priceChangePct.toFixed(2)}%</code> ${directionEmoji} (Nến nổ <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b> so với nền)`,
       payload.change1hPct !== undefined ? `<b>Xu hướng 1h:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
-      `<b>Open:</b> <code>$${payload.openPrice}</code> | <b>High:</b> <code>$${payload.highPrice}</code> | <b>Low:</b> <code>$${payload.lowPrice}</code> | <b>Now:</b> <code>$${payload.currentPrice}</code>`,
-      `<b>Volume nến 1m:</b> <code>${payload.volume1m.toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
-      takerBuyStr,
-      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Vào lệnh ngay trên Binance Futures</a>`,
-    ]
-      .filter(Boolean)
-      .join('\n');
+      `<b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code> (Open: <code>$${payload.openPrice}</code> | High: <code>$${payload.highPrice}</code>)`,
+      `<b>Dòng Tiền (1m Volume):</b> <code>${payload.volume1m.toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
+      takerStr,
+    ];
 
-    return this.sendMessage(message);
+    if (!isExit && payload.suggestedTp1 && payload.suggestedSl) {
+      lines.push(
+        `--------------`,
+        `🎯 <b>Gợi ý Chốt lời TP1 (+3%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code>`,
+        payload.suggestedTp2 ? `🎯 <b>Gợi ý Chốt lời TP2 (+6%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code>` : '',
+        `🛑 <b>Gợi ý Cắt lỗ SL (-1.5%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+      );
+    }
+
+    if (isExit && payload.reasonText) {
+      lines.push(
+        `--------------`,
+        `💡 <b>Lý do cảnh báo:</b> <i>${payload.reasonText}</i>`,
+        `👉 <b>Hành động khuyến nghị:</b> Chốt lời một phần hoặc dời Stoploss về Entry để bảo vệ lợi nhuận!`,
+      );
+    }
+
+    lines.push(
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Giao dịch ngay trên Binance Futures</a>`,
+    );
+
+    return this.sendMessage(lines.filter(Boolean).join('\n'));
   }
 }
