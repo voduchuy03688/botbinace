@@ -4,7 +4,7 @@ import axios from 'axios';
 
 export interface SpikeAlertPayload {
   symbol: string;
-  type: 'PRICE_PUMP' | 'VOLUME_SPIKE';
+  type: 'EARLY_WAVE_BREAKOUT' | 'CONTINUOUS_PUMP' | 'VOLUME_SURGE';
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
@@ -12,6 +12,8 @@ export interface SpikeAlertPayload {
   volume1m: number;
   avgVolume: number;
   volumeMultiplier: number;
+  volatilitySurgeRatio: number;
+  change1hPct?: number;
   takerBuyRatio?: number;
 }
 
@@ -54,14 +56,6 @@ export class TelegramService {
     return null;
   }
 
-  setChatId(id: string) {
-    this.chatId = id;
-  }
-
-  getChatId(): string {
-    return this.chatId;
-  }
-
   async sendMessage(text: string): Promise<boolean> {
     if (!this.botToken) {
       this.logger.error('TELEGRAM_BOT_TOKEN is not configured.');
@@ -97,20 +91,26 @@ export class TelegramService {
   }
 
   async sendSpikeAlert(payload: SpikeAlertPayload): Promise<boolean> {
-    const isPump = payload.type === 'PRICE_PUMP';
-    const titleEmoji = isPump ? '🚀 🚀 🚀 <b>PUMP ALERT (+5% in 1m)</b>' : '📊 🔥 <b>VOLUME SURGE ALERT</b>';
+    let titleEmoji = '🌊 🔥 <b>CẢNH BÁO ĐẦU CON SÓNG (BREAKOUT 1m)</b>';
+    if (payload.type === 'CONTINUOUS_PUMP') {
+      titleEmoji = '🚀 ⚡ <b>SÓNG TĂNG LIÊN TỤC (WAVE CONTINUATION)</b>';
+    } else if (payload.type === 'VOLUME_SURGE') {
+      titleEmoji = '📊 💥 <b>KHỐI LƯỢNG MUA ĐỘT BIẾN</b>';
+    }
+
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     
     const message = [
       titleEmoji,
       `<b>Symbol:</b> <code>${payload.symbol}</code>`,
-      `<b>Price Jump (1m):</b> <code>+${payload.priceChangePct.toFixed(2)}%</code>`,
-      `<b>Open:</b> <code>$${payload.openPrice}</code> | <b>High:</b> <code>$${payload.highPrice}</code> | <b>Now:</b> <code>$${payload.currentPrice}</code>`,
-      `<b>1m Volume:</b> <code>${payload.volume1m.toLocaleString()} USDT</code>`,
-      `<b>Volume Spike:</b> <code>${payload.volumeMultiplier.toFixed(1)}x</code> avg (${payload.avgVolume.toLocaleString()} USDT)`,
-      payload.takerBuyRatio ? `<b>Taker Buy Ratio:</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code>` : '',
+      `<b>Biến động nến 1m:</b> <code>+${payload.priceChangePct.toFixed(2)}%</code> (Đột biến <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b> so với nền)`,
+      payload.change1hPct !== undefined ? `<b>Xu hướng nến 1h:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
+      `<b>Giá Open:</b> <code>$${payload.openPrice}</code> | <b>High:</b> <code>$${payload.highPrice}</code> | <b>Hiện tại:</b> <code>$${payload.currentPrice}</code>`,
+      `<b>Volume nến 1m:</b> <code>${payload.volume1m.toLocaleString()} USDT</code>`,
+      `<b>Volume đột biến:</b> <code>${payload.volumeMultiplier.toFixed(1)}x</code> avg (${payload.avgVolume.toLocaleString()} USDT)`,
+      payload.takerBuyRatio ? `<b>Tỷ lệ Mua chủ động:</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code>` : '',
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Trade on Binance Futures</a>`,
+      `🔗 <a href="${binanceUrl}">Vào lệnh ngay trên Binance Futures</a>`,
     ]
       .filter(Boolean)
       .join('\n');

@@ -40,7 +40,7 @@ export class BinanceService {
     }
   }
 
-  async getKlines(symbol: string, interval = '1m', limit = 21): Promise<KlineData[]> {
+  async getKlines(symbol: string, interval = '1m', limit = 60): Promise<KlineData[]> {
     try {
       const url = `${this.fapiBase}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
       const res = await axios.get(url, { timeout: 5000 });
