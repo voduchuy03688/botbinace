@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { BinanceService } from '../binance/binance.service.js';
-import { TelegramService, EliteAlertPayload } from '../telegram/telegram.service.js';
+import { TelegramService, TieredAlertPayload } from '../telegram/telegram.service.js';
 
 @Injectable()
 export class ScannerService implements OnApplicationBootstrap {
@@ -21,9 +21,9 @@ export class ScannerService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khoi tao Scanner KIM CUONG (Sieuuuu Khap Khe - Maximum 1-3 tin nhan/ngay)...');
+    this.logger.log('Khoi tao Scanner Quet Lien Tuc 6s (Chong Troi Dau Song - Phan Hang NGON & CUC KI NGON)...');
     await this.refreshSymbols();
-    this.logger.log('Scanner active: Diamond Tier Signals Only (Score >= 92, NetFlow >= 200k USDT)');
+    this.logger.log('Scanner active: Fast 6s ticks for Tier 1 & Tier 2 Wave Starts');
   }
 
   @Cron('0 */30 * * * *')
@@ -31,7 +31,7 @@ export class ScannerService implements OnApplicationBootstrap {
     this.symbols = await this.binanceService.getUsdtFuturesSymbols();
   }
 
-  @Cron('*/10 * * * * *') // Quet moi 10 giay
+  @Cron('*/6 * * * * *') // Quet lien tuc moi 6 giay de khong bao gio bi tre dau song!
   async handleScanTick() {
     if (this.isScanning) {
       return;
@@ -71,23 +71,23 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const now = Date.now();
 
-    // 1. KHÓA TIN NHẮN TOÀN HỆ THỐNG CỰC TỎI:
-    // - Cooldown 60 phút cho cùng 1 symbol
-    // - Cooldown 5 phút (300 giây) toàn thị trường (Tối đa 1 tin nhắn mỗi 5 phút!)
+    // 1. Kiểm tra Cooldown:
+    // - Cooldown 10 phút cho cùng 1 symbol (không bao giờ báo lặp lại)
+    // - Cooldown 15 giây toàn thị trường (Đảm bảo tin nhắn đi ngay khi có coin khác bứt phá đầu sóng)
     const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
-    if (now - lastSymbolAlert < 60 * 60 * 1000) return;
-    if (now - this.lastGlobalAlertTime < 5 * 60 * 1000) return;
+    if (now - lastSymbolAlert < 10 * 60 * 1000) return;
+    if (now - this.lastGlobalAlertTime < 15 * 1000) return;
 
     const prev20Klines = klines.slice(-21, -1);
 
-    // 2. Biên độ nến nền phẳng (Phải cực kỳ phẳng lặng trước đó: <= 0.9%)
+    // 2. Biên độ nến nền phẳng (Kiểm tra xem coin có nằm phẳng lặng trước đó không)
     const avgCandleRangePct =
       prev20Klines.reduce((sum, k) => {
         const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
         return sum + range;
       }, 0) / prev20Klines.length;
 
-    const isDiamondQuietBase = avgCandleRangePct <= 0.9;
+    const isQuietBase = avgCandleRangePct <= 1.25;
 
     // 3. Biên độ nến hiện tại
     const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
@@ -95,7 +95,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const pumpSpikePct = Math.max(maxPumpPct, closePumpPct);
     const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
 
-    // 4. Phân tích Dòng Tiền Taker Mua chủ động KHỔNG LỒ
+    // 4. Phân tích Dòng Tiền Taker Mua chủ động
     const avgVolume =
       prev20Klines.reduce((acc, k) => acc + k.quoteVolume, 0) / prev20Klines.length;
     const avgTakerBuyVol =
@@ -110,7 +110,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const takerBuyPct = currentVol > 0 ? (takerBuyVol / currentVol) * 100 : 50;
 
     const takerBuyAcceleration = avgTakerBuyVol > 0 ? takerBuyVol / avgTakerBuyVol : 0;
-    const wasQuietVolumeBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.3) : true;
+    const wasQuietVolumeBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.6) : true;
 
     // 5. Xu hướng 1h
     const kline1hAgo = klines[0];
@@ -119,53 +119,48 @@ export class ScannerService implements OnApplicationBootstrap {
         ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100
         : undefined;
 
-    // CHẶN HOÀN TOÀN: Nếu coin đã tăng >= 8% trong 1h -> CHẶN ENTRY BẮT ĐỦ ĐỈNH!
-    if (change1hPct !== undefined && change1hPct >= 8.0) return;
+    // CHẶN ENTRY NẾU SÓNG ĐÃ CHẠY > 9%: Tránh đu đỉnh ở giữa/cuối sóng
+    if (change1hPct !== undefined && change1hPct >= 9.0) return;
 
-    // --- 6. SIÊU BỘ LỌC KIM CƯƠNG (NET CASHFLOW >= 200,000 USDT, TAKER BUY >= 82%) ---
-    let signalType: 'BAT_DAY_TICH_LUY' | 'DAU_CHAN_SONG_BANG_NO' | null = null;
+    // --- 6. PHÂN HẠNG 2 TẦNG CHẤT LƯỢNG (CỰC KÌ NGON vs TIN HIEU NGON) ---
+    let qualityTier: 'CUC_KI_NGON' | 'TIN_HIEU_NGON' | null = null;
 
-    // KỊCH BẢN 1: DAU_CHAN_SONG_BANG_NO
-    // - Nền siêu phẳng <= 0.9%
-    // - Taker Buy >= 82%
-    // - Dòng tiền ròng Net Flow >= 200,000 USDT trong 1m
-    // - Tốc độ bơm Volume Mua Taker gấp >= 6.0x
+    // TẦNG 1: CỰC KÌ NGON (Win Rate >= 90%, Net Flow >= 100,000 USDT, Taker Buy >= 78%, Acceleration >= 4.5x)
     if (
-      pumpSpikePct >= 1.8 &&
-      takerBuyPct >= 82 &&
-      netCashflow >= 200000 &&
-      takerBuyAcceleration >= 6.0 &&
-      wasQuietVolumeBefore &&
-      isDiamondQuietBase
-    ) {
-      signalType = 'DAU_CHAN_SONG_BANG_NO';
-    }
-    // KỊCH BẢN 2: BAT_DAY_TICH_LUY
-    // - Giá đang nén phẳng (-0.5% đến +0.5%)
-    // - Cá mập gom ròng Mua Taker >= 85%
-    // - Net Flow >= 150,000 USDT
-    // - Tăng tốc Mua >= 4.5x
-    else if (
-      net1mChangePct >= -0.5 &&
-      net1mChangePct <= 0.5 &&
-      takerBuyPct >= 85 &&
-      netCashflow >= 150000 &&
+      pumpSpikePct >= 1.5 &&
+      takerBuyPct >= 78 &&
+      netCashflow >= 100000 &&
       takerBuyAcceleration >= 4.5 &&
-      isDiamondQuietBase
+      wasQuietVolumeBefore &&
+      isQuietBase
     ) {
-      signalType = 'BAT_DAY_TICH_LUY';
+      qualityTier = 'CUC_KI_NGON';
+    }
+    // TẦNG 2: TÍN HIỆU NGON (Net Flow >= 50,000 USDT, Taker Buy >= 70%, Acceleration >= 3.0x)
+    else if (
+      pumpSpikePct >= 1.4 &&
+      takerBuyPct >= 70 &&
+      netCashflow >= 50000 &&
+      takerBuyAcceleration >= 3.0 &&
+      isQuietBase
+    ) {
+      qualityTier = 'TIN_HIEU_NGON';
     }
 
-    if (signalType) {
-      // Tính toán Điểm Tin Cậy Siêu Cao (Phải >= 92)
-      let score = 60;
-      score += Math.min(20, (takerBuyAcceleration / 8.0) * 20);     // Tốc độ dồn volume mua
-      score += Math.min(10, ((takerBuyPct - 50) / 35.0) * 10);      // Tỷ lệ chênh lệch Mua
-      score += Math.min(10, (netCashflow / 500000) * 10);           // Dòng tiền ròng khổng lồ
+    if (qualityTier) {
+      // Tính toán Điểm Tin Cậy (82 - 100 Điểm)
+      let score = 55;
+      score += Math.min(25, (takerBuyAcceleration / 5.0) * 25);
+      score += Math.min(10, ((takerBuyPct - 50) / 30.0) * 10);
+      score += Math.min(10, (netCashflow / 200000) * 10);
 
       const forecastScore = Math.min(100, Math.round(score));
 
-      if (forecastScore < 92) return; // CHỈ CHO PHÉP TÍN HIỆU KIM CƯƠNG >= 92 ĐIỂM GỬI ĐẾN TELEGRAM!
+      if (qualityTier === 'CUC_KI_NGON' && forecastScore < 90) {
+        qualityTier = 'TIN_HIEU_NGON';
+      }
+
+      if (forecastScore < 82) return; // Loại bỏ tất cả tín hiệu < 82 điểm
 
       this.symbolCooldowns.set(symbol, now);
       this.lastGlobalAlertTime = now;
@@ -174,9 +169,9 @@ export class ScannerService implements OnApplicationBootstrap {
       const suggestedTp2 = currentPrice * 1.06;
       const suggestedSl = currentPrice * 0.985;
 
-      const payload: EliteAlertPayload = {
+      const payload: TieredAlertPayload = {
         symbol,
-        type: signalType,
+        qualityTier,
         priceChangePct: net1mChangePct,
         openPrice,
         highPrice,
@@ -198,10 +193,10 @@ export class ScannerService implements OnApplicationBootstrap {
       };
 
       this.logger.warn(
-        `💎💎💎 [TÍN HIỆU KIM CƯƠNG] ${symbol} (${signalType}) -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
+        `🚀 [TÍN HIỆU ${qualityTier}] ${symbol} -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
       );
 
-      await this.telegramService.sendEliteAlert(payload);
+      await this.telegramService.sendTieredAlert(payload);
     }
   }
 }

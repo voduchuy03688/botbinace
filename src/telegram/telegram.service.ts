@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
-export interface EliteAlertPayload {
+export interface TieredAlertPayload {
   symbol: string;
-  type: 'BAT_DAY_TICH_LUY' | 'DAU_CHAN_SONG_BANG_NO';
+  qualityTier: 'CUC_KI_NGON' | 'TIN_HIEU_NGON';
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
@@ -21,7 +21,7 @@ export interface EliteAlertPayload {
   takerBuyPct: number;           // Tỷ lệ % Mua chủ động
   
   volatilitySurgeRatio: number;
-  forecastScore: number;         // 85 - 100 điểm tin cậy cực cao
+  forecastScore: number;         // 82 - 100 điểm tin cậy
 
   suggestedTp1: number;
   suggestedTp2: number;
@@ -102,23 +102,23 @@ export class TelegramService {
     }
   }
 
-  async sendEliteAlert(payload: EliteAlertPayload): Promise<boolean> {
-    const isBatDay = payload.type === 'BAT_DAY_TICH_LUY';
+  async sendTieredAlert(payload: TieredAlertPayload): Promise<boolean> {
+    const isCucKiNgon = payload.qualityTier === 'CUC_KI_NGON';
 
-    const header = isBatDay
-      ? '💎 🟢 <b>[TÍN HIỆU CỰC NGON: BẮT ĐÁY TÍCH LŨY]</b>'
-      : '🚀 🟢 <b>[TÍN HIỆU CỰC NGON: BẮT ĐẦU CHÂN SÓNG]</b>';
+    const header = isCucKiNgon
+      ? '🔥 🟢 <b>[TÍN HIỆU CỰC KÌ NGON - DỰ BÁO WIN RATE >= 90%]</b>'
+      : '⚡ 🟢 <b>[TÍN HIỆU NGON - CHUẨN ĐẦU CHÂN SÓNG]</b>';
 
-    const note = isBatDay
-      ? '💡 <i>Giá nén dưới đáy nhưng Cá mập dồn tiền mua ròng ạt $\\rightarrow$ Đỉnh cao bắt đáy!</i>'
-      : '🔥 <i>Nổ nến đầu tiên bứt phá từ nền phẳng, vị thế vào lệnh ngay chân sóng!</i>';
+    const note = isCucKiNgon
+      ? '🚀 <i>Dòng tiền Cá mập bơm cực lớn + Lực Mua áp đảo $\\rightarrow$ Cơ hội bứt phá ăn trọn sóng cực cao!</i>'
+      : '💎 <i>Dòng tiền ròng vừa bơm vào đầu chân sóng $\\rightarrow$ Vị thế vào lệnh đẹp an toàn!</i>';
 
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
       header,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (Tín hiệu hàng đầu)`,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'Hàng Cực VIP' : 'Hàng Chuẩn'})`,
       note,
       `----------------------------------------`,
       `📊 <b>DÒNG TIỀN MUA TAKER (1 PHÚT):</b>`,
