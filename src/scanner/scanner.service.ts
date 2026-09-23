@@ -213,7 +213,7 @@ export class ScannerService implements OnApplicationBootstrap {
     // --- 5. BẮT ĐẦU CHÂN SÓNG TĂNG (BẮN TÍN HIỆU NGAY LẬP TỨC REALTIME) ---
     const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastSymbolAlert < 10 * 60 * 1000) return;
-    if (now - this.lastGlobalAlertTime < 15 * 1000) return;
+    if (now - this.lastGlobalAlertTime < 2 * 1000) return; // Chi cho 2 giay buffer API Telegram
 
     const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
     const closePumpPct = ((currentPrice - openPrice) / openPrice) * 100;
