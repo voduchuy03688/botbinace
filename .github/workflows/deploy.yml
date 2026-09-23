@@ -1,0 +1,35 @@
+name: Deploy Bot to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            cd /root/botbinace
+            git pull origin main
+            cat << 'EOF' > .env
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+            SPIKE_THRESHOLD_PCT=5.0
+            VOLUME_SPIKE_MULTIPLIER=3.0
+            COOLDOWN_MINUTES=3
+            EOF
+            npm install
+            npm run build
+            pm2 restart botbinace || pm2 start dist/main.js --name botbinace
+            pm2 save
