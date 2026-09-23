@@ -4,8 +4,8 @@ import axios from 'axios';
 
 export interface TieredAlertPayload {
   symbol: string;
-  patternType: 'TICH_LUY' | 'CHAN_SONG';
-  qualityTier: 'CUC_KI_NGON' | 'NGON';
+  patternType: 'TICH_LUY' | 'CHAN_SONG' | 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT';
+  qualityTier?: 'CUC_KI_NGON' | 'NGON';
   
   priceChangePct: number;
   openPrice: number;
@@ -23,12 +23,13 @@ export interface TieredAlertPayload {
   takerBuyPct: number;           // Tỷ lệ % Mua chủ động
   
   volatilitySurgeRatio: number;
-  forecastScore: number;         // 82 - 100 điểm tin cậy
+  forecastScore: number;         // Điểm tin cậy
 
-  suggestedTp1: number;
-  suggestedTp2: number;
-  suggestedSl: number;
+  suggestedTp1?: number;
+  suggestedTp2?: number;
+  suggestedSl?: number;
   change1hPct?: number;
+  reasonText?: string;
 }
 
 @Injectable()
@@ -107,11 +108,18 @@ export class TelegramService {
   async sendTieredAlert(payload: TieredAlertPayload): Promise<boolean> {
     const isCucKiNgon = payload.qualityTier === 'CUC_KI_NGON';
     const isTichLuy = payload.patternType === 'TICH_LUY';
+    const isHetNgon = payload.patternType === 'HET_NGON_STAGNANT' || payload.patternType === 'HET_NGON_SELL_OUT';
 
     let header = '';
     let analysisNote = '';
 
-    if (isTichLuy) {
+    if (payload.patternType === 'HET_NGON_STAGNANT') {
+      header = '🔴 🛑 <b>[THÔNG BÁO: HẾT NGON - GIÁ ĐI NGANG NÉN ĐỨNG YÊN]</b>';
+      analysisNote = '🚨 <i>Phân tích: Lực Mua dừng lại sau 10-15 phút, coin nén đi ngang không bùng nổ $\\rightarrow$ HỦY THEO DÕI, KHÔNG VÀO NỮA!</i>';
+    } else if (payload.patternType === 'HET_NGON_SELL_OUT') {
+      header = '💰 🔴 <b>[THÔNG BÁO: HẾT NGON - CÁ MẠP BÁN XẢ / CHỐT LỜI LẬP TỨC]</b>';
+      analysisNote = '🚨 <i>Phân tích: Lực Bán Taker xả tháo mạnh hoặc giá rút chân khỏi đỉnh $\\rightarrow$ CHỐT LỜI NGAY HOẶC HỦY THEO DÕI, KHÔNG VÀO NỮA!</i>';
+    } else if (isTichLuy) {
       if (isCucKiNgon) {
         header = '💎 🔥 🟢 <b>[CỰC KÌ NGON: TÍCH LŨY CÁ MẠP DỒN TIỀN MUA (WIN RATE >= 90%)]</b>';
         analysisNote = '💡 <i>Phân tích: Giá đi ngang nén chặt dưới đáy nhưng Cá mập dồn dòng tiền Mua Taker khổng lồ $\\rightarrow$ Chuẩn bị bùng nổ chân sóng!</i>';
@@ -134,26 +142,43 @@ export class TelegramService {
     const lines: string[] = [
       header,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'KèoVIP Cực Khủng' : 'Kèo Chuẩn'})`,
+      !isHetNgon ? `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'Kèo VIP Cực Khủng' : 'Kèo Chuẩn'})` : '',
       analysisNote,
       `----------------------------------------`,
-      `📊 <b>PHÂN TÍCH DÒNG TIỀN MUA TAKER (1 PHÚT):</b>`,
-      `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>+${Math.round(payload.netCashflow).toLocaleString()} USDT</code> 🟢`,
+      `📊 <b>TRẠNG THÁI DÒNG TIỀN (1 PHÚT):</b>`,
+      `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>${payload.netCashflow >= 0 ? '+' : ''}${Math.round(payload.netCashflow).toLocaleString()} USDT</code>`,
       `• <b>Lực Mua Chủ Động (Taker Buy):</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
+      `• <b>Lực Bán Chủ Động (Taker Sell):</b> <code>${(100 - payload.takerBuyPct).toFixed(1)}%</code> (${Math.round(payload.takerSellVol).toLocaleString()} USDT)`,
       `• <b>Tổng Volume 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
       `----------------------------------------`,
-      `📈 <b>GIÁ VÀ MỤC TIÊU VÀO LỆNH:</b>`,
-      `• <b>Giá Entry Hiện Tại:</b> <code>$${payload.currentPrice}</code>`,
+      `📈 <b>GIÁ VÀ BIẾN ĐỘNG:</b>`,
+      `• <b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code> (Mở: <code>$${payload.openPrice}</code> | Cao nhất: <code>$${payload.highPrice}</code>)`,
       payload.change1hPct !== undefined ? `• <b>Xu hướng 1 giờ:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
-      `----------------------------------------`,
-      `🎯 <b>GỢI Ý QUẢN TRỊ LỆNH:</b>`,
-      `• <b>Chốt lời TP1 (+3%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code>`,
-      `• <b>Chốt lời TP2 (+6%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code>`,
-      `• <b>Cắt lỗ SL (-1.5%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+    ];
+
+    if (!isHetNgon && payload.suggestedTp1 && payload.suggestedSl) {
+      lines.push(
+        `----------------------------------------`,
+        `🎯 <b>GỢI Ý QUẢN TRỊ LỆNH:</b>`,
+        `• <b>Chốt lời TP1 (+3%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code>`,
+        payload.suggestedTp2 ? `• <b>Chốt lời TP2 (+6%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code>` : '',
+        `• <b>Cắt lỗ SL (-1.5%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+      );
+    }
+
+    if (isHetNgon && payload.reasonText) {
+      lines.push(
+        `----------------------------------------`,
+        `💡 <b>Lý do hủy tín hiệu:</b> <i>${payload.reasonText}</i>`,
+        `👉 <b>HÀNH ĐỘNG:</b> Chốt lời ngay nếu đã có lời, hoặc bỏ qua coin này không vào lệnh nữa!`,
+      );
+    }
+
+    lines.push(
       `----------------------------------------`,
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Mở Vị Thế Ngay Trên Binance Futures</a>`,
-    ];
+      `🔗 <a href="${binanceUrl}">Xem Ngay Trên Binance Futures</a>`,
+    );
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));
   }

@@ -4,11 +4,21 @@ import { ConfigService } from '@nestjs/config';
 import { BinanceService } from '../binance/binance.service.js';
 import { TelegramService, TieredAlertPayload } from '../telegram/telegram.service.js';
 
+interface ActivePositionTrack {
+  symbol: string;
+  entryPrice: number;
+  entryTime: number;
+  highestPrice: number;
+  lowestPrice: number;
+  lastExitAlertTime?: number;
+}
+
 @Injectable()
 export class ScannerService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ScannerService.name);
 
   private symbols: string[] = [];
+  private activePositions: Map<string, ActivePositionTrack> = new Map();
   private symbolCooldowns: Map<string, number> = new Map();
   private lastGlobalAlertTime = 0;
 
@@ -21,9 +31,9 @@ export class ScannerService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khoi tao Scanner Quet 6s Tich Luy & Chan Song (Ngon vs Cuc Ki Ngon)...');
+    this.logger.log('Khoi tao Scanner theo doi HET NGON & CHOT LOI...');
     await this.refreshSymbols();
-    this.logger.log('Scanner active: 4 Tier Classification (Accumulation & Breakouts)');
+    this.logger.log('Scanner active: Signal entries + Invalidation tracking');
   }
 
   @Cron('0 */30 * * * *')
@@ -31,7 +41,7 @@ export class ScannerService implements OnApplicationBootstrap {
     this.symbols = await this.binanceService.getUsdtFuturesSymbols();
   }
 
-  @Cron('*/6 * * * * *') // Quet moi 6 giay lien tuc
+  @Cron('*/6 * * * * *') // Quet moi 6 giay
   async handleScanTick() {
     if (this.isScanning) {
       return;
@@ -70,30 +80,9 @@ export class ScannerService implements OnApplicationBootstrap {
     if (openPrice <= 0) return;
 
     const now = Date.now();
-
-    // 1. Kiểm tra Cooldown (10 phút cho cùng 1 symbol, 15 giây toàn hệ thống)
-    const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
-    if (now - lastSymbolAlert < 10 * 60 * 1000) return;
-    if (now - this.lastGlobalAlertTime < 15 * 1000) return;
-
     const prev20Klines = klines.slice(-21, -1);
 
-    // 2. Kiểm tra nến nền phẳng (Càng phẳng càng chuẩn tích lũy)
-    const avgCandleRangePct =
-      prev20Klines.reduce((sum, k) => {
-        const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
-        return sum + range;
-      }, 0) / prev20Klines.length;
-
-    const isQuietBase = avgCandleRangePct <= 1.25;
-
-    // 3. Biên độ nến hiện tại
-    const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
-    const closePumpPct = ((currentPrice - openPrice) / openPrice) * 100;
-    const pumpSpikePct = Math.max(maxPumpPct, closePumpPct);
-    const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
-
-    // 4. Phân tích Dòng Tiền Taker Mua chủ động
+    // 1. Phân tích Dòng Tiền Taker Mua chủ động
     const avgVolume =
       prev20Klines.reduce((acc, k) => acc + k.quoteVolume, 0) / prev20Klines.length;
     const avgTakerBuyVol =
@@ -110,21 +99,106 @@ export class ScannerService implements OnApplicationBootstrap {
     const takerBuyAcceleration = avgTakerBuyVol > 0 ? takerBuyVol / avgTakerBuyVol : 0;
     const wasQuietVolumeBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.6) : true;
 
-    // 5. Xu hướng 1h
+    // 2. Xu hướng 1h
     const kline1hAgo = klines[0];
     const change1hPct =
       kline1hAgo && kline1hAgo.close > 0
         ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100
         : undefined;
 
+    const avgCandleRangePct =
+      prev20Klines.reduce((sum, k) => {
+        const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
+        return sum + range;
+      }, 0) / prev20Klines.length;
+
+    const isQuietBase = avgCandleRangePct <= 1.25;
+
+    // --- 3. KIỂM TRA HẾT NGON CHO CÁC COIN ĐÃ THÔNG BÁO ---
+    const trackedPos = this.activePositions.get(symbol);
+    if (trackedPos) {
+      if (currentPrice > trackedPos.highestPrice) trackedPos.highestPrice = currentPrice;
+      if (currentPrice < trackedPos.lowestPrice) trackedPos.lowestPrice = currentPrice;
+
+      const timeInPos = now - trackedPos.entryTime;
+      const lastExitAlert = trackedPos.lastExitAlertTime || 0;
+
+      if (now - lastExitAlert > 3 * 60 * 1000) { // Cooldown 3 phut giua cac thong bao het ngon
+        const dropFromPeakPct = ((trackedPos.highestPrice - currentPrice) / trackedPos.highestPrice) * 100;
+        const totalProfitPct = ((currentPrice - trackedPos.entryPrice) / trackedPos.entryPrice) * 100;
+
+        let isHetNgon = false;
+        let hetNgonPattern: 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT' = 'HET_NGON_STAGNANT';
+        let reasonText = '';
+
+        // Kịch bản A: Lực bán Taker xả mạnh hoặc Giá quay đầu rơi từ đỉnh >= 1.5%
+        if (takerBuyPct <= 38 && volumeMultiplier >= 1.8) {
+          isHetNgon = true;
+          hetNgonPattern = 'HET_NGON_SELL_OUT';
+          reasonText = `Cá mập bắt đầu xả tháo hàng (Lực Bán Taker xả chiếm ${(100 - takerBuyPct).toFixed(1)}%)!`;
+        } else if (dropFromPeakPct >= 1.5 && totalProfitPct > 0.5) {
+          isHetNgon = true;
+          hetNgonPattern = 'HET_NGON_SELL_OUT';
+          reasonText = `Giá đã quay đầu giảm -${dropFromPeakPct.toFixed(2)}% từ đỉnh ($${trackedPos.highestPrice}) $\\rightarrow$ Chốt lời ngay!`;
+        }
+        // Kịch bản B: Đi ngang kiệt sức sau 10-15 phút mà không tăng nổi (+0.3%)
+        else if (timeInPos >= 10 * 60 * 1000 && totalProfitPct <= 0.3) {
+          isHetNgon = true;
+          hetNgonPattern = 'HET_NGON_STAGNANT';
+          reasonText = `Tín hiệu bị trơ, giá đi ngang nén đứng yên sau 10 phút $\\rightarrow$ Hủy theo dõi!`;
+        }
+
+        if (isHetNgon) {
+          trackedPos.lastExitAlertTime = now;
+          if (hetNgonPattern === 'HET_NGON_STAGNANT') {
+            this.activePositions.delete(symbol); // Xoa khoi danh sach theo doi
+          }
+
+          const payload: TieredAlertPayload = {
+            symbol,
+            patternType: hetNgonPattern,
+            priceChangePct: totalProfitPct,
+            openPrice,
+            highPrice,
+            lowPrice,
+            currentPrice,
+            volume1m: currentVol,
+            avgVolume,
+            volumeMultiplier,
+            takerBuyVol,
+            takerSellVol,
+            netCashflow,
+            takerBuyPct,
+            volatilitySurgeRatio: avgCandleRangePct > 0 ? Math.abs(totalProfitPct) / avgCandleRangePct : 1,
+            forecastScore: 90,
+            change1hPct,
+            reasonText,
+          };
+
+          this.logger.warn(`🛑 [HET NGON] ${symbol} (${hetNgonPattern}) -> Reason: ${reasonText}`);
+          await this.telegramService.sendTieredAlert(payload);
+          return;
+        }
+      }
+    }
+
+    // --- 4. KIỂM TRA TÍN HIỆU ENTRY MỚI (NGON & CỰC KÌ NGON) ---
+    const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
+    if (now - lastSymbolAlert < 10 * 60 * 1000) return;
+    if (now - this.lastGlobalAlertTime < 15 * 1000) return;
+
+    const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
+    const closePumpPct = ((currentPrice - openPrice) / openPrice) * 100;
+    const pumpSpikePct = Math.max(maxPumpPct, closePumpPct);
+    const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
+
     // CHẶN ENTRY NẾU SÓNG ĐÃ CHẠY > 9%: Tránh đu đỉnh
     if (change1hPct !== undefined && change1hPct >= 9.0) return;
 
-    // --- 6. PHÂN LOẠI TÍCH LŨY & CHÂN SÓNG THEO 2 TẦNG (NGON & CỰC KÌ NGON) ---
     let patternType: 'TICH_LUY' | 'CHAN_SONG' | null = null;
     let qualityTier: 'CUC_KI_NGON' | 'NGON' | null = null;
 
-    // A. NHÓM 1: BẮT ĐẦU CHÂN SÓNG TĂNG (CHAN_SONG)
+    // A. BẮT ĐẦU CHÂN SÓNG TĂNG (CHAN_SONG)
     if (pumpSpikePct >= 1.5 && takerBuyPct >= 78 && netCashflow >= 100000 && takerBuyAcceleration >= 4.5 && isQuietBase) {
       patternType = 'CHAN_SONG';
       qualityTier = 'CUC_KI_NGON';
@@ -133,7 +207,7 @@ export class ScannerService implements OnApplicationBootstrap {
       qualityTier = 'NGON';
     }
 
-    // B. NHÓM 2: TÍCH LŨY DƯỚI ĐÁY (TICH_LUY)
+    // B. TÍCH LŨY DƯỚI ĐÁY (TICH_LUY)
     if (!patternType) {
       if (net1mChangePct >= -0.8 && net1mChangePct <= 0.6 && takerBuyPct >= 80 && netCashflow >= 80000 && takerBuyAcceleration >= 3.5 && isQuietBase) {
         patternType = 'TICH_LUY';
@@ -145,7 +219,6 @@ export class ScannerService implements OnApplicationBootstrap {
     }
 
     if (patternType && qualityTier) {
-      // Tính toán Điểm Tin Cậy (82 - 100 Điểm)
       let score = 55;
       score += Math.min(25, (takerBuyAcceleration / 5.0) * 25);
       score += Math.min(10, ((takerBuyPct - 50) / 30.0) * 10);
@@ -161,6 +234,13 @@ export class ScannerService implements OnApplicationBootstrap {
 
       this.symbolCooldowns.set(symbol, now);
       this.lastGlobalAlertTime = now;
+      this.activePositions.set(symbol, {
+        symbol,
+        entryPrice: currentPrice,
+        entryTime: now,
+        highestPrice: currentPrice,
+        lowestPrice: currentPrice,
+      });
 
       const suggestedTp1 = currentPrice * 1.03;
       const suggestedTp2 = currentPrice * 1.06;
