@@ -4,7 +4,9 @@ import axios from 'axios';
 
 export interface TieredAlertPayload {
   symbol: string;
-  qualityTier: 'CUC_KI_NGON' | 'TIN_HIEU_NGON';
+  patternType: 'TICH_LUY' | 'CHAN_SONG';
+  qualityTier: 'CUC_KI_NGON' | 'NGON';
+  
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
@@ -104,26 +106,40 @@ export class TelegramService {
 
   async sendTieredAlert(payload: TieredAlertPayload): Promise<boolean> {
     const isCucKiNgon = payload.qualityTier === 'CUC_KI_NGON';
+    const isTichLuy = payload.patternType === 'TICH_LUY';
 
-    const header = isCucKiNgon
-      ? '🔥 🟢 <b>[TÍN HIỆU CỰC KÌ NGON - DỰ BÁO WIN RATE >= 90%]</b>'
-      : '⚡ 🟢 <b>[TÍN HIỆU NGON - CHUẨN ĐẦU CHÂN SÓNG]</b>';
+    let header = '';
+    let analysisNote = '';
 
-    const note = isCucKiNgon
-      ? '🚀 <i>Dòng tiền Cá mập bơm cực lớn + Lực Mua áp đảo $\\rightarrow$ Cơ hội bứt phá ăn trọn sóng cực cao!</i>'
-      : '💎 <i>Dòng tiền ròng vừa bơm vào đầu chân sóng $\\rightarrow$ Vị thế vào lệnh đẹp an toàn!</i>';
+    if (isTichLuy) {
+      if (isCucKiNgon) {
+        header = '💎 🔥 🟢 <b>[CỰC KÌ NGON: TÍCH LŨY CÁ MẠP DỒN TIỀN MUA (WIN RATE >= 90%)]</b>';
+        analysisNote = '💡 <i>Phân tích: Giá đi ngang nén chặt dưới đáy nhưng Cá mập dồn dòng tiền Mua Taker khổng lồ $\\rightarrow$ Chuẩn bị bùng nổ chân sóng!</i>';
+      } else {
+        header = '💎 ⚡ 🟢 <b>[TÍN HIỆU NGON: TÍCH LŨY GOM HÀNG CHUẨN ĐÁY]</b>';
+        analysisNote = '💡 <i>Phân tích: Lực Mua gom âm thầm áp đảo phe bán tại vùng hỗ trợ $\\rightarrow$ Vị thế gom hàng an toàn!</i>';
+      }
+    } else {
+      if (isCucKiNgon) {
+        header = '🚀 🔥 🟢 <b>[CỰC KÌ NGON: BẮT ĐẦU CHÂN SÓNG TĂNG (WIN RATE >= 90%)]</b>';
+        analysisNote = '💡 <i>Phân tích: Cây nến bứt phá nổ Volume khổng lồ ngay từ nền phẳng $\\rightarrow$ Ăn trọn sóng tăng cực mạnh!</i>';
+      } else {
+        header = '🚀 ⚡ 🟢 <b>[TÍN HIỆU NGON: BẮT ĐẦU CHÂN SÓNG TĂNG]</b>';
+        analysisNote = '💡 <i>Phân tích: Dòng tiền Mua vừa bơm vào kích hoạt đà tăng $\\rightarrow$ Entry chuẩn ngay đầu chân sóng!</i>';
+      }
+    }
 
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
       header,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'Hàng Cực VIP' : 'Hàng Chuẩn'})`,
-      note,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'KèoVIP Cực Khủng' : 'Kèo Chuẩn'})`,
+      analysisNote,
       `----------------------------------------`,
-      `📊 <b>DÒNG TIỀN MUA TAKER (1 PHÚT):</b>`,
+      `📊 <b>PHÂN TÍCH DÒNG TIỀN MUA TAKER (1 PHÚT):</b>`,
       `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>+${Math.round(payload.netCashflow).toLocaleString()} USDT</code> 🟢`,
-      `• <b>Lực Mua Chủ Động:</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
+      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
       `• <b>Tổng Volume 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
       `----------------------------------------`,
       `📈 <b>GIÁ VÀ MỤC TIÊU VÀO LỆNH:</b>`,

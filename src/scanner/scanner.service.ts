@@ -21,9 +21,9 @@ export class ScannerService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khoi tao Scanner Quet Lien Tuc 6s (Chong Troi Dau Song - Phan Hang NGON & CUC KI NGON)...');
+    this.logger.log('Khoi tao Scanner Quet 6s Tich Luy & Chan Song (Ngon vs Cuc Ki Ngon)...');
     await this.refreshSymbols();
-    this.logger.log('Scanner active: Fast 6s ticks for Tier 1 & Tier 2 Wave Starts');
+    this.logger.log('Scanner active: 4 Tier Classification (Accumulation & Breakouts)');
   }
 
   @Cron('0 */30 * * * *')
@@ -31,7 +31,7 @@ export class ScannerService implements OnApplicationBootstrap {
     this.symbols = await this.binanceService.getUsdtFuturesSymbols();
   }
 
-  @Cron('*/6 * * * * *') // Quet lien tuc moi 6 giay de khong bao gio bi tre dau song!
+  @Cron('*/6 * * * * *') // Quet moi 6 giay lien tuc
   async handleScanTick() {
     if (this.isScanning) {
       return;
@@ -71,16 +71,14 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const now = Date.now();
 
-    // 1. Kiểm tra Cooldown:
-    // - Cooldown 10 phút cho cùng 1 symbol (không bao giờ báo lặp lại)
-    // - Cooldown 15 giây toàn thị trường (Đảm bảo tin nhắn đi ngay khi có coin khác bứt phá đầu sóng)
+    // 1. Kiểm tra Cooldown (10 phút cho cùng 1 symbol, 15 giây toàn hệ thống)
     const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastSymbolAlert < 10 * 60 * 1000) return;
     if (now - this.lastGlobalAlertTime < 15 * 1000) return;
 
     const prev20Klines = klines.slice(-21, -1);
 
-    // 2. Biên độ nến nền phẳng (Kiểm tra xem coin có nằm phẳng lặng trước đó không)
+    // 2. Kiểm tra nến nền phẳng (Càng phẳng càng chuẩn tích lũy)
     const avgCandleRangePct =
       prev20Klines.reduce((sum, k) => {
         const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
@@ -119,35 +117,34 @@ export class ScannerService implements OnApplicationBootstrap {
         ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100
         : undefined;
 
-    // CHẶN ENTRY NẾU SÓNG ĐÃ CHẠY > 9%: Tránh đu đỉnh ở giữa/cuối sóng
+    // CHẶN ENTRY NẾU SÓNG ĐÃ CHẠY > 9%: Tránh đu đỉnh
     if (change1hPct !== undefined && change1hPct >= 9.0) return;
 
-    // --- 6. PHÂN HẠNG 2 TẦNG CHẤT LƯỢNG (CỰC KÌ NGON vs TIN HIEU NGON) ---
-    let qualityTier: 'CUC_KI_NGON' | 'TIN_HIEU_NGON' | null = null;
+    // --- 6. PHÂN LOẠI TÍCH LŨY & CHÂN SÓNG THEO 2 TẦNG (NGON & CỰC KÌ NGON) ---
+    let patternType: 'TICH_LUY' | 'CHAN_SONG' | null = null;
+    let qualityTier: 'CUC_KI_NGON' | 'NGON' | null = null;
 
-    // TẦNG 1: CỰC KÌ NGON (Win Rate >= 90%, Net Flow >= 100,000 USDT, Taker Buy >= 78%, Acceleration >= 4.5x)
-    if (
-      pumpSpikePct >= 1.5 &&
-      takerBuyPct >= 78 &&
-      netCashflow >= 100000 &&
-      takerBuyAcceleration >= 4.5 &&
-      wasQuietVolumeBefore &&
-      isQuietBase
-    ) {
+    // A. NHÓM 1: BẮT ĐẦU CHÂN SÓNG TĂNG (CHAN_SONG)
+    if (pumpSpikePct >= 1.5 && takerBuyPct >= 78 && netCashflow >= 100000 && takerBuyAcceleration >= 4.5 && isQuietBase) {
+      patternType = 'CHAN_SONG';
       qualityTier = 'CUC_KI_NGON';
-    }
-    // TẦNG 2: TÍN HIỆU NGON (Net Flow >= 50,000 USDT, Taker Buy >= 70%, Acceleration >= 3.0x)
-    else if (
-      pumpSpikePct >= 1.4 &&
-      takerBuyPct >= 70 &&
-      netCashflow >= 50000 &&
-      takerBuyAcceleration >= 3.0 &&
-      isQuietBase
-    ) {
-      qualityTier = 'TIN_HIEU_NGON';
+    } else if (pumpSpikePct >= 1.4 && takerBuyPct >= 70 && netCashflow >= 50000 && takerBuyAcceleration >= 3.0 && isQuietBase) {
+      patternType = 'CHAN_SONG';
+      qualityTier = 'NGON';
     }
 
-    if (qualityTier) {
+    // B. NHÓM 2: TÍCH LŨY DƯỚI ĐÁY (TICH_LUY)
+    if (!patternType) {
+      if (net1mChangePct >= -0.8 && net1mChangePct <= 0.6 && takerBuyPct >= 80 && netCashflow >= 80000 && takerBuyAcceleration >= 3.5 && isQuietBase) {
+        patternType = 'TICH_LUY';
+        qualityTier = 'CUC_KI_NGON';
+      } else if (net1mChangePct >= -1.0 && net1mChangePct <= 0.8 && takerBuyPct >= 72 && netCashflow >= 45000 && takerBuyAcceleration >= 2.5 && isQuietBase) {
+        patternType = 'TICH_LUY';
+        qualityTier = 'NGON';
+      }
+    }
+
+    if (patternType && qualityTier) {
       // Tính toán Điểm Tin Cậy (82 - 100 Điểm)
       let score = 55;
       score += Math.min(25, (takerBuyAcceleration / 5.0) * 25);
@@ -157,7 +154,7 @@ export class ScannerService implements OnApplicationBootstrap {
       const forecastScore = Math.min(100, Math.round(score));
 
       if (qualityTier === 'CUC_KI_NGON' && forecastScore < 90) {
-        qualityTier = 'TIN_HIEU_NGON';
+        qualityTier = 'NGON';
       }
 
       if (forecastScore < 82) return; // Loại bỏ tất cả tín hiệu < 82 điểm
@@ -171,6 +168,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
       const payload: TieredAlertPayload = {
         symbol,
+        patternType,
         qualityTier,
         priceChangePct: net1mChangePct,
         openPrice,
@@ -193,7 +191,7 @@ export class ScannerService implements OnApplicationBootstrap {
       };
 
       this.logger.warn(
-        `🚀 [TÍN HIỆU ${qualityTier}] ${symbol} -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
+        `🚀 [${patternType} - ${qualityTier}] ${symbol} -> Score: ${forecastScore}/100, NetCashflow: +${Math.round(netCashflow)} USDT`,
       );
 
       await this.telegramService.sendTieredAlert(payload);
