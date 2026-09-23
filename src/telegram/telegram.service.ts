@@ -5,11 +5,13 @@ import axios from 'axios';
 export interface OrderflowAlertPayload {
   symbol: string;
   patternType:
-    | 'NET_INFLOW_PUMP'       // Dòng tiền mua dồn dập + Giá tăng -> ĐẦU SÓNG TĂNG
-    | 'ACCUMULATION_DIP'     // Giá giảm/đi ngang nhưng Dòng tiền mua gom âm thầm -> TÍCH LŨY DƯỚI ĐÁY
-    | 'DISTRIBUTION_TRAP'    // Giá tăng nhưng Dòng tiền bán xả chèn ép -> BẪY TĂNG GIẢ (BẮT ĐẦU XẢ)
-    | 'NET_OUTFLOW_DUMP'     // Dòng tiền bán tháo + Giá giảm mạnh -> ĐẦU SÓNG GIẢM / CHỐT LỜI
-    | 'EXIT_TAKE_PROFIT';    // Dòng tiền mua kiệt sức -> CẢNH BÁO CHỐT LỜI
+    | 'NET_INFLOW_PUMP'       // Dòng tiền mua dồn dập + Giá vừa bứt phá từ nền -> ĐẦU SÓNG TĂNG
+    | 'ACCUMULATION_DIP'     // Giá đi ngang tích lũy dưới đáy nhưng Dòng tiền mua gom âm thầm -> ĐẦU SÓNG TÍCH LŨY
+    | 'DISTRIBUTION_TRAP'    // Giá đẩy nhẹ nhưng Dòng tiền bán xả chèn ép -> BẪY TĂNG GIẢ
+    | 'NET_OUTFLOW_DUMP'     // Dòng tiền bán tháo tháo chạy -> ĐẦU SÓNG GIẢM
+    | 'EXIT_TAKE_PROFIT';    // Dòng tiền mua kiệt sức -> CHỐT LỜI
+
+  wavePhase: 'EARLY_BASE' | 'MID_LATE_WAVE'; // Trạng thái vị thế sóng
 
   priceChangePct: number;
   openPrice: number;
@@ -116,26 +118,30 @@ export class TelegramService {
 
     switch (payload.patternType) {
       case 'NET_INFLOW_PUMP':
-        header = '🟢 🚀 <b>[DÒNG TIỀN MUA VÀO ẠT - BẮT ĐẦU SÓNG TĂNG]</b>';
-        patternNote = '🔥 <i>Dòng tiền ròng Mua vào bùng nổ, phe Mua làm chủ hoàn toàn thị trường!</i>';
+        header = '🟢 🚀 <b>[DÒNG TIỀN VƯA ĐỔ VÀO - BẮT ĐẦU CHÂN SÓNG TĂNG]</b>';
+        patternNote = '🔥 <i>Dòng tiền ròng Mua đột biến bứt phá từ nền phẳng, vị thế vào lệnh chuẩn ngay đầu chân sóng!</i>';
         break;
       case 'ACCUMULATION_DIP':
-        header = '🟢 💎 <b>[TÍCH LŨY ÂM THẦM - GIÁ GIẢM NHƯNG CÁ MẠP DỒN TIỀN MUA]</b>';
-        patternNote = '💡 <i>Giá đang giảm nhẹ/đi ngang nhưng Volume Mua Taker áp đảo $\\rightarrow$ Cá mập âm thầm gom hàng dưới đáy!</i>';
+        header = '🟢 💎 <b>[TÍCH LŨY DƯỚI ĐÁY - CÁ MẠP ÂM THẦM DỒN TIỀN MUA]</b>';
+        patternNote = '💡 <i>Giá đang nén đi ngang nhưng Volume Mua Taker gom cực mạnh $\\rightarrow$ Chuẩn bị bùng nổ đầu sóng!</i>';
         break;
       case 'DISTRIBUTION_TRAP':
-        header = '⚠️ 🔴 <b>[CẢNH BÁO BẪY TĂNG GIẢ - GIÁ TĂNG NHƯNG DÒNG TIỀN ĐANG XẢ]</b>';
-        patternNote = '🚨 <i>Giá đẩy tăng nhẹ nhưng Lực Bán Taker xả cực mạnh $\\rightarrow$ Bẫy dụ nhỏ lẻ vào để xả hàng!</i>';
+        header = '⚠️ 🔴 <b>[CẢNH BÁO BẪY TĂNG GIẢ - DÒNG TIỀN ĐANG XẢ HÀNG]</b>';
+        patternNote = '🚨 <i>Giá đẩy nhích nhưng Lực Bán Taker xả chèn ép $\\rightarrow$ Bẫy dụ nhỏ lẻ, tuyệt đối không đu đỉnh!</i>';
         break;
       case 'NET_OUTFLOW_DUMP':
-        header = '🔴 🔻 <b>[DÒNG TIỀN BÁN XẢ THÁO - BẮT ĐẦU SÓNG GIẢM]</b>';
-        patternNote = '💥 <i>Lực Bán chủ động xả tháo ạt, dòng tiền rút khỏi thị trường mạnh mẽ!</i>';
+        header = '🔴 🔻 <b>[DÒNG TIỀN BÁN XẢ THÁO - BẮT ĐẦU CHÂN SÓNG GIẢM]</b>';
+        patternNote = '💥 <i>Lực Bán Taker xả tháo ạt từ đỉnh nền, vị thế SHORT chuẩn ngay đầu sóng giảm!</i>';
         break;
       case 'EXIT_TAKE_PROFIT':
         header = '💰 🌟 <b>[DÒNG TIỀN MUA KIỆT SỨC - KHUYẾN NGHỊ CHỐT LỜI]</b>';
         patternNote = '💡 <i>Lực Mua dừng lại và Lực Bán gia tăng $\\rightarrow$ Hãy chốt lời hoặc dời SL bảo vệ lợi nhuận!</i>';
         break;
     }
+
+    const phaseTag = payload.wavePhase === 'EARLY_BASE'
+      ? '🌱 <b>[VỊ THẾ: ĐẦU CHÂN SÓNG - AN TOÀN CAO]</b>'
+      : '⚠️ <b>[VỊ THẾ: SÓNG ĐÃ CHẠY DÀI - CẨN TRỌNG ĐU ĐỈNH]</b>';
 
     const netCashflowStr = payload.netCashflow >= 0
       ? `+${Math.round(payload.netCashflow).toLocaleString()} USDT (DÒNG TIỀN VÀO 🟢)`
@@ -146,10 +152,11 @@ export class TelegramService {
     const lines: string[] = [
       header,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
+      phaseTag,
       `🎯 <b>DỰ ĐOÁN XÁC SUẤT:</b> <code>${payload.forecastLabel}</code> (Độ tin cậy: <b>${payload.forecastScore}/100</b>)`,
       patternNote,
       `----------------------------------------`,
-      `📊 <b>PHÂN TÍCH DÒNG TIỀN MUA / BÁN (1 PHÚT):</b>`,
+      `📊 <b>PHÂN TÍCH DÒNG TIỀN ĐỘT BIẾN (1 PHÚT):</b>`,
       `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>${netCashflowStr}</code>`,
       `• <b>Volume Mua Chủ Động (Taker Buy):</b> <code>${Math.round(payload.takerBuyVol).toLocaleString()} USDT</code> (<b>${payload.takerBuyPct.toFixed(1)}%</b>)`,
       `• <b>Volume Bán Chủ Động (Taker Sell):</b> <code>${Math.round(payload.takerSellVol).toLocaleString()} USDT</code> (<b>${(100 - payload.takerBuyPct).toFixed(1)}%</b>)`,

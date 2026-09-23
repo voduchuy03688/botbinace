@@ -31,9 +31,9 @@ export class ScannerService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khoi tao Scanner Bắt Đầu Dòng Tiền Vừa VÀO (Net Orderflow Acceleration)...');
+    this.logger.log('Khoi tao Scanner Chon Loc Ngay Dau Chan Song (Strict Early Wave Filter)...');
     await this.refreshSymbols();
-    this.logger.log('Scanner đang quét Dòng Tiền VƯA BƠM VÀO 100% Tiếng Việt...');
+    this.logger.log('Scanner dang quet DONG TIEN VOAP BAN DAU - CHONG DU DINH...');
   }
 
   @Cron('0 */30 * * * *')
@@ -41,7 +41,7 @@ export class ScannerService implements OnApplicationBootstrap {
     this.symbols = await this.binanceService.getUsdtFuturesSymbols();
   }
 
-  @Cron('*/10 * * * * *') // Quét mỗi 10 giây
+  @Cron('*/10 * * * * *') // Quet moi 10 giay
   async handleScanTick() {
     if (this.isScanning) {
       return;
@@ -59,7 +59,7 @@ export class ScannerService implements OnApplicationBootstrap {
         await Promise.all(batch.map((sym) => this.scanSymbol(sym)));
       }
     } catch (err: any) {
-      this.logger.error(`Lỗi khi quét thị trường: ${err.message}`);
+      this.logger.error(`Loi khi quet thi truong: ${err.message}`);
     } finally {
       this.isScanning = false;
     }
@@ -80,9 +80,20 @@ export class ScannerService implements OnApplicationBootstrap {
     if (openPrice <= 0) return;
 
     const now = Date.now();
-    const prev30Klines = klines.slice(-31, -1);
+    const prev20Klines = klines.slice(-21, -1);
+    const prev60Klines = klines;
 
-    // 1. Biên độ nến 1m
+    // 1. Bien do nen nen tinh (20 nen truoc)
+    const avgCandleRangePct =
+      prev20Klines.reduce((sum, k) => {
+        const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
+        return sum + range;
+      }, 0) / prev20Klines.length;
+
+    // Kiem tra nen truoc do co phang lang (Dau Chan Song)
+    const isQuietBase = avgCandleRangePct <= 1.25;
+
+    // 2. Bien do gia nen 1m hien tai
     const maxPumpPct = ((highPrice - openPrice) / openPrice) * 100;
     const closePumpPct = ((currentPrice - openPrice) / openPrice) * 100;
     const maxDumpPct = ((openPrice - lowPrice) / openPrice) * 100;
@@ -92,18 +103,11 @@ export class ScannerService implements OnApplicationBootstrap {
     const dumpSpikePct = Math.max(maxDumpPct, closeDumpPct);
     const net1mChangePct = ((currentPrice - openPrice) / openPrice) * 100;
 
-    // 2. Biên độ nến nền tĩnh (30 nến trước)
-    const avgCandleRangePct =
-      prev30Klines.reduce((sum, k) => {
-        const range = k.open > 0 ? ((k.high - k.low) / k.open) * 100 : 0;
-        return sum + range;
-      }, 0) / prev30Klines.length;
-
     // 3. Phân tích Dòng Tiền Taker Mua vs Bán Chi Tiết
     const avgVolume =
-      prev30Klines.reduce((acc, k) => acc + k.quoteVolume, 0) / prev30Klines.length;
+      prev20Klines.reduce((acc, k) => acc + k.quoteVolume, 0) / prev20Klines.length;
     const avgTakerBuyVol =
-      prev30Klines.reduce((acc, k) => acc + k.takerBuyQuoteVolume, 0) / prev30Klines.length;
+      prev20Klines.reduce((acc, k) => acc + k.takerBuyQuoteVolume, 0) / prev20Klines.length;
 
     const currentVol = currentCandle.quoteVolume;
     const volumeMultiplier = avgVolume > 0 ? currentVol / avgVolume : 0;
@@ -113,9 +117,9 @@ export class ScannerService implements OnApplicationBootstrap {
     const netCashflow = takerBuyVol - takerSellVol; // Dòng tiền ròng (USDT)
     const takerBuyPct = currentVol > 0 ? (takerBuyVol / currentVol) * 100 : 50;
 
-    // Tăng tốc dòng tiền mua: Nến hiện tại volume Mua Taker gấp >= 2.5x trung bình VÀ nến trước đó còn phẳng lặng
+    // Tăng tốc dòng tiền mua
     const takerBuyAcceleration = avgTakerBuyVol > 0 ? takerBuyVol / avgTakerBuyVol : 0;
-    const wasQuietBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.8) : true;
+    const wasQuietVolumeBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.8) : true;
 
     // 4. Xu hướng 1h
     const kline1hAgo = klines[0];
@@ -123,6 +127,9 @@ export class ScannerService implements OnApplicationBootstrap {
       kline1hAgo && kline1hAgo.close > 0
         ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100
         : undefined;
+
+    // BLOCKED LATE WAVE: Nếu coin đã tăng > 12% trong 1h qua -> ĐÃ CHẠY GIỮA/CUỐI SÓNG -> BLOCK ENTRY BẮT ĐỦ ĐỈNH!
+    const isLateWavePump = change1hPct !== undefined && change1hPct >= 12.0;
 
     // --- 5. KIỂM TRA CHỐT LỜI/EXIT CHO VỊ THẾ ĐANG THEO DÕI ---
     const trackedPos = this.activePositions.get(symbol);
@@ -152,6 +159,7 @@ export class ScannerService implements OnApplicationBootstrap {
           const payload: OrderflowAlertPayload = {
             symbol,
             patternType: 'EXIT_TAKE_PROFIT',
+            wavePhase: 'EARLY_BASE',
             priceChangePct: totalProfitPct,
             openPrice,
             highPrice,
@@ -171,14 +179,14 @@ export class ScannerService implements OnApplicationBootstrap {
             reasonText: exitReason,
           };
 
-          this.logger.warn(`💰 [CẢNH BÁO CHỐT LỜI] ${symbol} -> Profit: ${totalProfitPct.toFixed(2)}%, Reason: ${exitReason}`);
+          this.logger.warn(`💰 [CANH BAO CHOT LOI] ${symbol} -> Profit: ${totalProfitPct.toFixed(2)}%, Reason: ${exitReason}`);
           await this.telegramService.sendOrderflowAlert(payload);
           return;
         }
       }
     }
 
-    // --- 6. PHÂN TÍCH MÔ HÌNH DÒNG TIỀN VỪA BẮT ĐẦU ĐỔ VÀO (INITIAL CASHFLOW INFLOW) ---
+    // --- 6. PHÂN TÍCH MÔ HÌNH DÒNG TIỀN CHUẨN ĐẦU CHÂN SÓNG (EARLY BASE BREAKOUT) ---
     const lastEntryTime = this.entryCooldowns.get(symbol) || 0;
     if (now - lastEntryTime < 5 * 60 * 1000) return; // Cooldown 5 phut
 
@@ -191,49 +199,41 @@ export class ScannerService implements OnApplicationBootstrap {
 
     let isTriggered = false;
 
-    // LỘC CHẶT CHẼ: CHỈ THÔNG BÁO KHI DÒNG TIỀN VỪA BƠM ĐỘT BIẾN (Taker Buy Acceleration >= 2.5x & Nền trước phẳng)
-    // Pattern 1: NET_INFLOW_PUMP (Dòng tiền mua VỪA ĐỔ VÀO + Lực Mua Taker >= 64% + Net Flow > 20k USDT)
-    if (
-      pumpSpikePct >= 1.5 &&
-      takerBuyPct >= 64 &&
-      netCashflow > 20000 &&
-      takerBuyAcceleration >= 2.5 &&
-      wasQuietBefore
-    ) {
-      patternType = 'NET_INFLOW_PUMP';
-      isTriggered = true;
+    // LOẠI BỎ SÓNG CUỐI / ĐU ĐỈNH: Không phát tín hiệu Entry Mua nếu coin đã tăng > 12% ở giữa/cuối sóng
+    if (!isLateWavePump) {
+      // Pattern 1: NET_INFLOW_PUMP (Dòng tiền mua VỪA NỔ ĐỘT BIẾN TỪ ĐẦU CHÂN SÓNG)
+      if (
+        pumpSpikePct >= 1.5 &&
+        takerBuyPct >= 65 &&
+        netCashflow > 25000 &&
+        takerBuyAcceleration >= 2.8 &&
+        wasQuietVolumeBefore &&
+        isQuietBase
+      ) {
+        patternType = 'NET_INFLOW_PUMP';
+        isTriggered = true;
+      }
+      // Pattern 2: ACCUMULATION_DIP (Nền phẳng đi ngang âm thầm Gom Mua)
+      else if (
+        net1mChangePct >= -0.8 &&
+        net1mChangePct <= 0.8 &&
+        takerBuyPct >= 70 &&
+        netCashflow >= 30000 &&
+        takerBuyAcceleration >= 2.5 &&
+        isQuietBase
+      ) {
+        patternType = 'ACCUMULATION_DIP';
+        isTriggered = true;
+      }
     }
-    // Pattern 2: ACCUMULATION_DIP (Giá đang tích lũy/đi ngang nhẹ nhưng Dòng tiền Mua VỪA BƠM MẠNH >= 68%)
-    else if (
-      net1mChangePct >= -1.0 &&
-      net1mChangePct <= 0.8 &&
-      takerBuyPct >= 68 &&
-      netCashflow >= 30000 &&
-      takerBuyAcceleration >= 2.5 &&
-      wasQuietBefore
-    ) {
-      patternType = 'ACCUMULATION_DIP';
-      isTriggered = true;
-    }
-    // Pattern 3: DISTRIBUTION_TRAP (Giá tăng nhẹ nhưng Dòng tiền BÁN VỪA XẢ THÁO ĐỘT BIẾN)
-    else if (
-      pumpSpikePct >= 1.5 &&
-      takerBuyPct <= 35 &&
-      netCashflow < -20000 &&
-      volumeMultiplier >= 2.5 &&
-      wasQuietBefore
-    ) {
+
+    // Pattern 3: DISTRIBUTION_TRAP (Giá đẩy nhích nhẹ nhưng Dòng tiền đang XẢ tháo)
+    if (!isTriggered && pumpSpikePct >= 1.5 && takerBuyPct <= 35 && netCashflow < -25000 && volumeMultiplier >= 2.5) {
       patternType = 'DISTRIBUTION_TRAP';
       isTriggered = true;
     }
-    // Pattern 4: NET_OUTFLOW_DUMP (Dòng tiền bán tháo VỪA BẮT ĐẦU XẢ CỰC MẠNH)
-    else if (
-      dumpSpikePct >= 1.5 &&
-      takerBuyPct <= 35 &&
-      netCashflow < -20000 &&
-      volumeMultiplier >= 2.5 &&
-      wasQuietBefore
-    ) {
+    // Pattern 4: NET_OUTFLOW_DUMP (Dòng tiền bán xả tháo từ chân sóng giảm)
+    else if (!isTriggered && dumpSpikePct >= 1.5 && takerBuyPct <= 35 && netCashflow < -25000 && volumeMultiplier >= 2.5) {
       patternType = 'NET_OUTFLOW_DUMP';
       isTriggered = true;
     }
@@ -241,32 +241,25 @@ export class ScannerService implements OnApplicationBootstrap {
     if (isTriggered && patternType) {
       // Tính toán Điểm Tin Cậy Dự Đoán (0 - 100 Điểm)
       let score = 0;
-      score += Math.min(40, (takerBuyAcceleration / 4.0) * 40);                       // Tốc độ bơm tiền mua
-      score += Math.min(30, (Math.abs(takerBuyPct - 50) / 35.0) * 30);              // Tỷ lệ chênh lệch Mua/Bán
-      score += Math.min(20, (Math.abs(netCashflow) / 100000) * 20);                  // Giá trị Dòng tiền ròng
-      if (change1hPct !== undefined) {
-        if ((patternType === 'NET_INFLOW_PUMP' || patternType === 'ACCUMULATION_DIP') && change1hPct > 0) {
-          score += Math.min(10, (change1hPct / 8.0) * 10);
-        }
-        if ((patternType === 'DISTRIBUTION_TRAP' || patternType === 'NET_OUTFLOW_DUMP') && change1hPct < 0) {
-          score += Math.min(10, (Math.abs(change1hPct) / 8.0) * 10);
-        }
-      }
+      score += Math.min(40, (takerBuyAcceleration / 4.0) * 40);                       // Tốc độ dồn volume mua
+      score += Math.min(30, (Math.abs(takerBuyPct - 50) / 35.0) * 30);              // Chênh lệch Mua/Bán
+      score += Math.min(20, (Math.abs(netCashflow) / 100000) * 20);                  // Dòng tiền ròng USDT
+      if (isQuietBase) score += 10;                                                  // Thưởng 10 điểm nền đi ngang chuẩn đầu chân sóng
 
       const forecastScore = Math.min(100, Math.round(score));
 
-      let forecastLabel = '⚡ CƠ HỘI BẮT ĐẦU VÀO SÓNG';
+      let forecastLabel = '🌱 ĐẦU CHÂN SÓNG TĂNG MỚI KÍCH HOẠT';
       if (patternType === 'NET_INFLOW_PUMP') {
         forecastLabel = forecastScore >= 85
-          ? '🔥 DÒNG TIỀN VỪA BƠM MẠNH - ĐẦU SÓNG TĂNG'
-          : '🟢 DÒNG TIỀN VỪA VÀO (ENTRY MUA)';
+          ? '🔥 ĐẦU CHÂN SÓNG TĂNG CỰC MẠNH (ENTRY CHUẨN ĐẦU SÓNG)'
+          : '🟢 DÒNG TIỀN VỪA VÀO ĐẦU SÓNG (ENTRY MUA)';
       } else if (patternType === 'ACCUMULATION_DIP') {
-        forecastLabel = '💎 TÍCH LŨY ÂM THẦM (BẮT ĐÁY ĐẦU SÓNG)';
+        forecastLabel = '💎 TÍCH LŨY ÂM THẦM DƯỚI ĐÁY (ENTRY BẮT ĐÁY ĐẦU SÓNG)';
       } else if (patternType === 'DISTRIBUTION_TRAP') {
         forecastLabel = '🚨 BẪY TĂNG GIẢ (CÁ MẠP ĐANG XẢ HÀNG)';
       } else if (patternType === 'NET_OUTFLOW_DUMP') {
         forecastLabel = forecastScore >= 85
-          ? '🔥 DÒNG TIỀN VỪA XẢ THÁO - ĐẦU SÓNG GIẢM'
+          ? '🔥 ĐẦU CHÂN SÓNG GIẢM CỰC MẠNH (ENTRY SHORT CHUẨN)'
           : '🔴 DÒNG TIỀN VỪA RÚT (ENTRY SHORT)';
       }
 
@@ -289,6 +282,7 @@ export class ScannerService implements OnApplicationBootstrap {
       const payload: OrderflowAlertPayload = {
         symbol,
         patternType,
+        wavePhase: isQuietBase ? 'EARLY_BASE' : 'MID_LATE_WAVE',
         priceChangePct: net1mChangePct,
         openPrice,
         highPrice,
@@ -311,7 +305,7 @@ export class ScannerService implements OnApplicationBootstrap {
       };
 
       this.logger.warn(
-        `🚨 [DÒNG TIỀN VỪA VÀO] ${symbol} (${patternType}) -> NetCashflow: ${Math.round(netCashflow)} USDT, Acceleration: ${takerBuyAcceleration.toFixed(1)}x`,
+        `🚨 [ĐẦU CHÂN SÓNG] ${symbol} (${patternType}) -> NetCashflow: ${Math.round(netCashflow)} USDT, Score: ${forecastScore}/100`,
       );
 
       await this.telegramService.sendOrderflowAlert(payload);
