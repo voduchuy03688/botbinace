@@ -4,15 +4,19 @@ import axios from 'axios';
 
 export interface SpikeAlertPayload {
   symbol: string;
-  type: 'EARLY_WAVE_BREAKOUT' | 'CONTINUOUS_PUMP' | 'VOLUME_SURGE';
+  direction: 'PUMP' | 'DUMP';
+  type: 'EARLY_WAVE_BREAKOUT' | 'CONTINUOUS_WAVE' | 'VOLUME_SURGE';
   priceChangePct: number;
   openPrice: number;
   highPrice: number;
+  lowPrice: number;
   currentPrice: number;
   volume1m: number;
   avgVolume: number;
   volumeMultiplier: number;
   volatilitySurgeRatio: number;
+  forecastScore: number;       // 0 - 100
+  forecastLabel: string;        // e.g. "BẮT ĐẦU SÓNG TĂNG CỰC MẠNH"
   change1hPct?: number;
   takerBuyRatio?: number;
 }
@@ -91,24 +95,39 @@ export class TelegramService {
   }
 
   async sendSpikeAlert(payload: SpikeAlertPayload): Promise<boolean> {
-    let titleEmoji = '🌊 🔥 <b>CẢNH BÁO ĐẦU CON SÓNG (BREAKOUT 1m)</b>';
-    if (payload.type === 'CONTINUOUS_PUMP') {
-      titleEmoji = '🚀 ⚡ <b>SÓNG TĂNG LIÊN TỤC (WAVE CONTINUATION)</b>';
-    } else if (payload.type === 'VOLUME_SURGE') {
-      titleEmoji = '📊 💥 <b>KHỐI LƯỢNG MUA ĐỘT BIẾN</b>';
+    const isPump = payload.direction === 'PUMP';
+
+    // Distinct Header & Emojis based on direction
+    let header = '';
+    if (isPump) {
+      header = payload.type === 'CONTINUOUS_WAVE'
+        ? '🚀 🟢 <b>[SÓNG TĂNG LIÊN TỤC] CONTINUOUS PUMP</b>'
+        : '🟢 🌊 <b>[TĂNG - BẮT ĐẦU CON SÓNG] BULLISH BREAKOUT</b>';
+    } else {
+      header = payload.type === 'CONTINUOUS_WAVE'
+        ? '🔻 🔴 <b>[SÓNG GIẢM LIÊN TỤC] CONTINUOUS DUMP</b>'
+        : '🔴 ⚠️ <b>[GIẢM - XẢ SẢNH / ĐẦU SÓNG GIẢM] BEARISH BREAKDOWN</b>';
     }
 
+    const directionEmoji = isPump ? '📈' : '📉';
+    const arrowSymbol = isPump ? '▲ +' : '▼ ';
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    
+
+    const takerBuyStr = payload.takerBuyRatio !== undefined
+      ? isPump
+        ? `<b>Phe Mua Áp Đảo (Taker Buy):</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code>`
+        : `<b>Phe Bán Áp Đảo (Taker Sell):</b> <code>${((1 - payload.takerBuyRatio) * 100).toFixed(1)}%</code>`
+      : '';
+
     const message = [
-      titleEmoji,
+      header,
       `<b>Symbol:</b> <code>${payload.symbol}</code>`,
-      `<b>Biến động nến 1m:</b> <code>+${payload.priceChangePct.toFixed(2)}%</code> (Đột biến <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b> so với nền)`,
-      payload.change1hPct !== undefined ? `<b>Xu hướng nến 1h:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
-      `<b>Giá Open:</b> <code>$${payload.openPrice}</code> | <b>High:</b> <code>$${payload.highPrice}</code> | <b>Hiện tại:</b> <code>$${payload.currentPrice}</code>`,
-      `<b>Volume nến 1m:</b> <code>${payload.volume1m.toLocaleString()} USDT</code>`,
-      `<b>Volume đột biến:</b> <code>${payload.volumeMultiplier.toFixed(1)}x</code> avg (${payload.avgVolume.toLocaleString()} USDT)`,
-      payload.takerBuyRatio ? `<b>Tỷ lệ Mua chủ động:</b> <code>${(payload.takerBuyRatio * 100).toFixed(1)}%</code>` : '',
+      `🎯 <b>DỰ ĐOÁN:</b> <code>${payload.forecastLabel}</code> (Đánh giá: <b>${payload.forecastScore}/100</b>)`,
+      `<b>Nến 1m Biến động:</b> <code>${arrowSymbol}${payload.priceChangePct.toFixed(2)}%</code> ${directionEmoji} (Gấp <b>${payload.volatilitySurgeRatio.toFixed(1)}x</b> so với nền)`,
+      payload.change1hPct !== undefined ? `<b>Xu hướng 1h:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
+      `<b>Open:</b> <code>$${payload.openPrice}</code> | <b>High:</b> <code>$${payload.highPrice}</code> | <b>Low:</b> <code>$${payload.lowPrice}</code> | <b>Now:</b> <code>$${payload.currentPrice}</code>`,
+      `<b>Volume nến 1m:</b> <code>${payload.volume1m.toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
+      takerBuyStr,
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
       `🔗 <a href="${binanceUrl}">Vào lệnh ngay trên Binance Futures</a>`,
     ]
