@@ -152,13 +152,10 @@ export class ScannerService implements OnApplicationBootstrap {
 
     this.isScanning = true;
     try {
-      // 1. Quản lý và theo dõi các vị thế đang chạy (TP1, TP2 hoặc HẾT NGON duy nhất 1 lần)
+      // 1. Quản lý và theo dõi các vị thế đang chạy (TP1, TP2 hoặc SL/HẾT NGON)
       await this.trackActivePositions();
 
-      // 2. Quét Watchlist Rũ hàng bậc thang: Kiểm tra xem dòng tiền đã vào lại chưa
-      await this.scanShakeoutWatchlist();
-
-      // 3. Quét các token tiềm năng
+      // 2. Quét các token tiềm năng
       const allTickers = this.binanceService.getAllTickers24h();
       if (allTickers.length === 0) return;
 
@@ -168,18 +165,16 @@ export class ScannerService implements OnApplicationBootstrap {
         return now - lastAlert > 15 * 60 * 1000; // Cooldown 15 phút mỗi coin
       });
 
-      // Lọc nhanh: Vùng đáy (chân sóng tăng) + Vùng đỉnh phân phối (chân sóng giảm) + Vùng biến động
+      // LỌC NHANH: CHỈ TẬP TRUNG TOKEN VÙNG ĐÁY CHÂN SÓNG TĂNG + THANH KHOẢN CAO (>= 5M USDT)
       const bottomCandidates = validTickers.filter(
-        (t) => t.bottomRangePct <= 38 && t.priceChangePercent <= 5.0 && t.priceChangePercent >= -18.0,
-      );
-      const topCandidates = validTickers.filter(
-        (t) => t.bottomRangePct >= 58 && t.priceChangePercent >= -3.0 && t.priceChangePercent <= 25.0,
-      );
-      const activeCandidates = validTickers.filter(
-        (t) => t.priceChangePercent <= -2.0 || (t.priceChangePercent >= 1.0 && t.priceChangePercent <= 10.0),
+        (t) =>
+          t.quoteVolume >= 5_000_000 &&
+          t.bottomRangePct <= 35 &&
+          t.priceChangePercent <= 6.0 &&
+          t.priceChangePercent >= -15.0,
       );
 
-      const targetPool = Array.from(new Set([...bottomCandidates, ...topCandidates, ...activeCandidates])).slice(0, 150);
+      const targetPool = bottomCandidates.slice(0, 100);
 
       const batchSize = 20;
       for (let i = 0; i < targetPool.length; i += batchSize) {
@@ -194,7 +189,7 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // 3. THUẬT TOÁN ĐỊNH LƯỢNG: BẮT ĐÚNG CHÂN SÓNG TĂNG & CHÂN SÓNG GIẢM (WINRATE > 95%)
+  // 3. THUẬT TOÁN ĐỊNH LƯỢNG: BẮT ĐÚNG TRÚNG CHÂN SÓNG TĂNG (WINRATE > 95%)
   // =========================================================================
   private async analyzeSymbol(symbol: string) {
     const klines = await this.binanceService.getKlines(symbol, '1m', 60);
@@ -205,19 +200,8 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const now = Date.now();
 
-    // 1. BẮT ĐÚNG CHÂN SÓNG TĂNG (LONG - ĐẢM BẢO VÀO NGAY CHÂN NỀN TÍCH LŨY)
-    const uptrendFound = await this.detectFootOfUptrend(symbol, klines, ticker24h, now);
-    if (uptrendFound) return;
-
-    // 2. BẮT ĐÚNG CHÂN SÓNG GIẢM (SHORT - ĐẢM BẢO VÀO NGAY ĐỈNH PHÂN PHỐI BẮT ĐẦU LAO DỐC)
-    const downtrendFound = await this.detectFootOfDowntrend(symbol, klines, ticker24h, now);
-    if (downtrendFound) return;
-
-    // 3. RŨ HÀNG BẬC THANG (STAIRCASE UPTREND + SUDDEN DUMP)
-    this.detectShakeoutCandidate(symbol, klines, now);
-
-    // 4. DÒNG TIỀN THOÁT CỰC MẠNH + NẢY LÊN 1 CÂY ẢO -> SHORT (BULL TRAP)
-    await this.detectBulltrapShort(symbol, klines, ticker24h, now);
+    // CHỈ THÔNG BÁO BẮT ĐÚNG TRÚNG CHÂN SÓNG TĂNG (LONG TẠI NỀN ĐÁY)
+    await this.detectFootOfUptrend(symbol, klines, ticker24h, now);
   }
 
   // =========================================================================
@@ -253,8 +237,11 @@ export class ScannerService implements OnApplicationBootstrap {
     const upperWickRatio = upperWick / candleRange;
     const priceChange1mPct = ((currentPrice - openPrice) / openPrice) * 100;
 
-    // Cấu trúc nến bứt phá nguy hiểm ít: thân đặc >= 58%, râu trên <= 14% (không bị xả dập đầu)
-    if (bodyRatio < 0.58 || upperWickRatio > 0.14) return false;
+    // YÊU CẦU: BIẾN ĐỘNG MẠNH NGAY TẠI CHÂN SÓNG (tăng dứt khoát 0.60% - 2.2%, không nhích lờ đờ, không fomo ngọn nến)
+    if (priceChange1mPct < 0.60 || priceChange1mPct > 2.2) return false;
+
+    // Cấu trúc nến bứt phá uy lực: thân đặc >= 62%, râu trên <= 12% (phe mua áp đảo hoàn toàn, không bị xả đè đầu)
+    if (bodyRatio < 0.62 || upperWickRatio > 0.12) return false;
 
     // 2. Kiểm tra nền tích lũy 20 nến trước đó (baseKlines)
     const baseKlines = klines.slice(n - 22, n - 2);
@@ -265,43 +252,52 @@ export class ScannerService implements OnApplicationBootstrap {
     if (baseMinLow <= 0) return false;
 
     const baseRangePct = ((baseMaxHigh - baseMinLow) / baseMinLow) * 100;
-    // Nền phải nén phẳng lì, gom hàng chuẩn chỉ (biên độ dao động <= 1.8%)
-    if (baseRangePct > 1.8) return false;
+    // Nền phải nén phẳng lì, gom hàng chuẩn chỉ (biên độ dao động <= 2.0%)
+    if (baseRangePct > 2.0) return false;
+
+    // YÊU CẦU: SÓNG MỚI TĂNG (Bứt phá dứt khoát vượt qua đỉnh hộp tích lũy nền)
+    // Giá phải vượt hoặc chạm sát đỉnh nền đi ngang (xác nhận bắt đầu chu kỳ sóng tăng mới)
+    if (currentPrice < baseMaxHigh * 0.998) return false;
 
     // 3. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG (ĐÁY NỀN):
-    // Đảm bảo VÀO ĐÚNG NGAY CHÂN SÓNG - NGUY HIỂM ÍT:
-    // Chỉ mới nhấc chân từ 0.30% đến 1.30%!
-    // Tuyệt đối không vào khi đã tăng > 1.30% từ đáy nền (tránh fomo ngọn sóng)
+    // Đảm bảo BẮT ĐÚNG NGAY CHÂN SÓNG - NGUY HIỂM ÍT:
+    // Chỉ mới nhấc chân từ 0.40% đến 1.40% tính từ đáy nền gom hàng!
     const distanceFromFootPct = ((currentPrice - baseMinLow) / baseMinLow) * 100;
-    if (distanceFromFootPct < 0.30 || distanceFromFootPct > 1.30) return false;
+    if (distanceFromFootPct < 0.40 || distanceFromFootPct > 1.40) return false;
 
-    // 4. Vị thế đáy 24h & 1h: Sát 32% đáy thấp nhất 24h
-    if (ticker24h.bottomRangePct > 32) return false;
+    // 4. Vị thế đáy 24h & 1h & Thanh khoản thực tế:
+    // Sát 35% đáy thấp nhất 24h & Thanh khoản 24h >= 5 triệu USDT (loại bỏ coin rác kém thanh khoản)
+    if (ticker24h.bottomRangePct > 35) return false;
+    if (ticker24h.quoteVolume < 5_000_000) return false;
 
     const kline1hAgo = klines[0];
     const change1hPct =
       kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
-    if (change1hPct > 3.0 || change1hPct < -5.0) return false;
+    if (change1hPct > 4.0 || change1hPct < -6.0) return false;
 
-    // 5. Dòng tiền thông minh (Smart Money Flow) bùng nổ mạnh mẽ ngay tại chân sóng
+    // 5. YÊU CẦU: VOLUME VÀO CỰC KỲ MẠNH (Dòng tiền tổ chức / cá mập bùng nổ chân sóng)
     const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
     const currentVol1m = currentCandle.quoteVolume;
     const volumeMultiplier = avgBaseVolume > 0 ? currentVol1m / avgBaseVolume : 0;
-    if (volumeMultiplier < 2.8) return false;
+    // Khối lượng 1m phải đột biến ít nhất gấp 3.2 lần so với trung bình các nến đi ngang trước đó
+    if (volumeMultiplier < 3.2) return false;
 
     const takerBuyVol1m = currentCandle.takerBuyQuoteVolume;
     const takerSellVol1m = Math.max(0, currentVol1m - takerBuyVol1m);
     const netCashflow1m = takerBuyVol1m - takerSellVol1m;
     const takerBuyPct1m = currentVol1m > 0 ? (takerBuyVol1m / currentVol1m) * 100 : 50;
-    if (takerBuyPct1m < 80 || netCashflow1m < 85_000) return false;
+    // Khối lượng mua chủ động 1m >= 130k USDT, dòng tiền ròng 1m >= 100k USDT, Taker Mua >= 80%
+    if (currentVol1m < 160_000 || takerBuyVol1m < 130_000 || takerBuyPct1m < 80 || netCashflow1m < 100_000) {
+      return false;
+    }
 
-    // 3m & 5m & 15m
+    // 3m & 5m & 15m Dòng tiền bồi vào liên tục (Không phải 1 cây nến đơn lẻ rồi tắt)
     const last3Klines = klines.slice(n - 3);
     const vol3m = last3Klines.reduce((s, k) => s + k.quoteVolume, 0);
     const buyVol3m = last3Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
     const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
-    if (takerBuyPct3m < 72 || netCashflow3m < 90_000) return false;
+    if (takerBuyPct3m < 72 || netCashflow3m < 140_000) return false;
 
     const last5Klines = klines.slice(n - 5);
     const vol5m = last5Klines.reduce((s, k) => s + k.quoteVolume, 0);
@@ -309,14 +305,14 @@ export class ScannerService implements OnApplicationBootstrap {
     const netCashflow5m = buyVol5m - (vol5m - buyVol5m);
     const takerBuyPct5m = vol5m > 0 ? (buyVol5m / vol5m) * 100 : 50;
     const greenCandles5m = last5Klines.filter((k) => k.close >= k.open).length;
-    if (takerBuyPct5m < 68 || netCashflow5m < 140_000 || greenCandles5m < 3) return false;
+    if (takerBuyPct5m < 68 || netCashflow5m < 200_000 || greenCandles5m < 3) return false;
 
     const last15Klines = klines.slice(n - 15);
     const vol15m = last15Klines.reduce((s, k) => s + k.quoteVolume, 0);
     const buyVol15m = last15Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow15m = buyVol15m - (vol15m - buyVol15m);
     const takerBuyPct15m = vol15m > 0 ? (buyVol15m / vol15m) * 100 : 50;
-    if (takerBuyPct15m < 62 || netCashflow15m < 30_000) return false;
+    if (takerBuyPct15m < 60 || netCashflow15m < 0) return false;
 
     // Tính điểm đánh giá (Score) đảm bảo ĂN CHẮC WINRATE > 95%
     let score = 70;
@@ -329,7 +325,7 @@ export class ScannerService implements OnApplicationBootstrap {
     if (takerBuyPct1m >= 85 && takerBuyPct5m >= 75) score += 10;
     else if (takerBuyPct1m >= 80) score += 6;
 
-    if (netCashflow5m >= 250_000) score += 10;
+    if (netCashflow5m >= 300_000) score += 10;
     else score += 5;
 
     if (bodyRatio >= 0.7 && upperWickRatio <= 0.1) score += 8;
@@ -940,26 +936,30 @@ export class ScannerService implements OnApplicationBootstrap {
       let hetNgonReason = '';
 
       if (!isShort) {
-        // VỊ THẾ LONG: Hết ngon khi lực bán xả nhiều hoặc chạm SL
-        if (takerSellPct5 >= 65 && netCashflowSell >= 70_000 && profitPct < 0.8) {
-          isHetNgon = true;
-          hetNgonReason = `Lực bán tháo Taker xả chiếm ${takerSellPct5.toFixed(1)}% qua 5 cây nến liên tiếp, dòng tiền rút ròng -${Math.round(netCashflowSell).toLocaleString()} USDT.`;
-        } else if (currentPrice <= pos.slPrice) {
+        // VỊ THẾ LONG:
+        // 1. Chạm Stop Loss an toàn ngay dưới đáy nền (rủi ro cực thấp <= 1.35%)
+        if (currentPrice <= pos.slPrice) {
           isHetNgon = true;
           hetNgonReason = pos.tp1Hit
-            ? `Giá quay về chạm mức hòa vốn Entry ($${pos.entryPrice}) sau khi đã chốt 50% TP1.`
-            : `Giá chạm ngưỡng dừng lỗ an toàn (-1.8%).`;
+            ? `Giá điều chỉnh chạm mức hòa vốn Entry ($${pos.entryPrice}) sau khi đã chốt 50% TP1 (+3.2%). Lệnh đã hoàn tất an toàn có lãi.`
+            : `Giá chạm ngưỡng dừng lỗ an toàn sát đáy nền ($${pos.slPrice.toFixed(4)}). Cắt lỗ bảo toàn vốn theo đúng quy chuẩn nguy hiểm ít.`;
+        }
+        // 2. Thoát lệnh khẩn cấp CHỈ KHI có xả tháo đột biến cực lớn từ cá mập (> 350,000 USDT)
+        // Tuyệt đối không thoát sớm trong 5 phút đầu do biến động retest thông thường
+        else if (currentPrice < pos.entryPrice * 0.992 && takerSellPct5 >= 80 && netCashflowSell >= 350_000) {
+          isHetNgon = true;
+          hetNgonReason = `Cảnh báo cá mập xả tháo ồ ạt: Taker Bán ${takerSellPct5.toFixed(1)}% với volume rút ròng -${Math.round(netCashflowSell).toLocaleString()} USDT. Thoát vị thế khẩn cấp bảo toàn vốn!`;
         }
       } else {
-        // VỊ THẾ SHORT: Hết ngon khi lực mua đảo chiều nhiều hoặc chạm SL
-        if (takerBuyPct5 >= 65 && -netCashflowSell >= 70_000 && profitPct < 0.8) {
-          isHetNgon = true;
-          hetNgonReason = `Lực Mua Taker bất ngờ đảo chiều bơm mạnh (${takerBuyPct5.toFixed(1)}%) qua 5 cây nến liên tiếp. Đóng lệnh Short bảo toàn vốn!`;
-        } else if (currentPrice >= pos.slPrice) {
+        // VỊ THẾ SHORT:
+        if (currentPrice >= pos.slPrice) {
           isHetNgon = true;
           hetNgonReason = pos.tp1Hit
             ? `Giá tăng ngược chạm mức hòa vốn Entry ($${pos.entryPrice}).`
-            : `Giá tăng chạm ngưỡng dừng lỗ Short (+1.8%).`;
+            : `Giá tăng chạm ngưỡng dừng lỗ Short an toàn.`;
+        } else if (currentPrice > pos.entryPrice * 1.008 && (100 - takerSellPct5) >= 80 && -netCashflowSell >= 350_000) {
+          isHetNgon = true;
+          hetNgonReason = `Lực Mua Taker bất ngờ đảo chiều bơm cực mạnh (> 350k USDT). Đóng lệnh Short bảo toàn vốn!`;
         }
       }
 
