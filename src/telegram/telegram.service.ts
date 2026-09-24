@@ -51,6 +51,65 @@ export interface VipSpikeAlertPayload {
   analysisReason: string;
 }
 
+export interface VipShortAlertPayload {
+  symbol: string;
+  currentPrice: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  bouncePct: number;
+
+  // Dòng tiền thoát cực mạnh (Outflow)
+  netCashflow15m: number;
+  takerSellPct15m: number;
+  netCashflow1h: number;
+  change1hPct: number;
+
+  // Cú nảy ảo 1m
+  volume1m: number;
+  volumeMultiplier: number;
+  upperWickRatio: number;
+
+  forecastScore: number;
+  estimatedWinRate: number;
+
+  entryPrice: number;
+  suggestedTp1: number;
+  suggestedTp2: number;
+  suggestedSl: number;
+  rewardRiskRatio: number;
+  analysisReason: string;
+}
+
+export interface ShakeoutWatchPayload {
+  symbol: string;
+  staircaseTrendText: string;
+  currentPrice: number;
+  shakeoutDropPct: number;
+  dropLow: number;
+  estimatedSupport: number;
+  note: string;
+}
+
+export interface ShakeoutReentryAlertPayload {
+  symbol: string;
+  currentPrice: number;
+  shakeoutLow: number;
+  recoveryPct: number;
+  netCashflow1m: number;
+  takerBuyPct1m: number;
+  netCashflow3m: number;
+  volumeMultiplier: number;
+  forecastScore: number;
+  estimatedWinRate: number;
+  entryPrice: number;
+  suggestedTp1: number;
+  suggestedTp2: number;
+  suggestedSl: number;
+  rewardRiskRatio: number;
+  analysisReason: string;
+}
+
 export interface HetNgonAlertPayload {
   symbol: string;
   entryPrice: number;
@@ -242,6 +301,95 @@ export class TelegramService {
 
     return this.sendMessage(lines.join('\n'));
   }
+
+  // TÍN HIỆU SHORT VIP: BẪY TĂNG GIẢ (BULL TRAP) - DÒNG TIỀN ĐANG THOÁT CỰC MẠNH
+  async sendVipShortAlert(payload: VipShortAlertPayload): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+
+    const lines: string[] = [
+      '⚡ 🔴 📉 <b>[TÍN HIỆU SHORT VIP: BẪY TĂNG GIẢ (BULL TRAP)]</b>',
+      '🚨 <b>DÒNG TIỀN ĐANG THOÁT CỰC MẠNH - CƠ HỘI SHORT ĐỈNH SÓNG HỒI</b>',
+      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ SHORT:</b> <b>${payload.forecastScore}/100</b> (Winrate Short: <b>${payload.estimatedWinRate}%+</b>)`,
+      '----------------------------------------',
+      '🌊 <b>DÒNG TIỀN LỚN ĐANG THÁO CHẠY CỰC MẠNH:</b>',
+      `• <b>Lực Bán Taker 15m:</b> <code>${payload.takerSellPct15m.toFixed(1)}%</code> (Phe bán áp đảo hoàn toàn)`,
+      `• <b>Dòng Tiền Ròng Thoát 15m:</b> <code>-${Math.round(Math.abs(payload.netCashflow15m)).toLocaleString()} USDT</code> 🔴`,
+      `• <b>Xu Hướng 1h:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code> (Đang trong kênh giảm dốc)`,
+      '----------------------------------------',
+      '⚠️ <b>BẪY TĂNG HỒI ẢO (BULL TRAP 1M):</b>',
+      `• <b>Cú Giật Nảy Lên:</b> <code>+${payload.bouncePct.toFixed(2)}%</code> (Volume 1m: <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code>)`,
+      `• <b>Râu Nến Trên Xả Ngược:</b> <code>${(payload.upperWickRatio * 100).toFixed(0)}%</code> chiều dài nến`,
+      '• <b>Bản Chất:</b> Cú nảy kỹ thuật do cạn thanh khoản bán tạm thời, cá mập tận dụng để xả nốt hàng giá cao!',
+      '----------------------------------------',
+      '🎯 <b>KẾ HOẠCH LỆNH SHORT VIP:</b>',
+      `• <b>Vào Lệnh (Entry Short):</b> <code>$${payload.entryPrice}</code> (Short ngay đỉnh cú nảy)`,
+      `• <b>Chốt Lời TP1 (+3.2% khi giá giảm):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
+      `• <b>Chốt Lời TP2 (+6.5% khi giá giảm):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn sóng sập)`,
+      `• <b>Cắt Lỗ SL (+1.8% khi giá tăng):</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay trên râu nến)`,
+      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
+      '----------------------------------------',
+      `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
+      '----------------------------------------',
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế SHORT Trên Binance Futures</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
+  }
+
+  // THÔNG BÁO THEO DÕI: RŨ HÀNG BẬC THANG (CHỜ DÒNG TIỀN VÀO LẠI ĐỂ VÀO)
+  async sendShakeoutWatchAlert(payload: ShakeoutWatchPayload): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+
+    const lines: string[] = [
+      '👀 ⚠️ 🟡 <b>[THEO DÕI ĐẶC BIỆT: RŨ HÀNG BẬC THANG (SHAKEOUT)]</b>',
+      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
+      `• <b>Cấu Trúc Trước Đó:</b> ${payload.staircaseTrendText} (Tăng bậc thang liên tục, không phải pump ảo)`,
+      `• <b>Biến Động Rũ Hàng:</b> Nến xả bất ngờ <code>-${payload.shakeoutDropPct.toFixed(2)}%</code> về <code>$${payload.dropLow}</code> (Chạm hỗ trợ <code>$${payload.estimatedSupport.toFixed(4)}</code>)`,
+      '----------------------------------------',
+      '💡 <b>CHIẾN THUẬT BOT:</b>',
+      '<i>Bot đang đưa vào Watchlist theo dõi dòng tiền Taker Mua. NGAY KHI CÓ DÒNG TIỀN VÀO LẠI HẤP THỤ LƯỢNG HÀNG XẢ, BOT SẼ PHÁT TÍN HIỆU VÀO LỆNH NGAY LẬP TỨC!</i>',
+      '----------------------------------------',
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Xem Trên Binance Futures</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
+  }
+
+  // TÍN HIỆU VÀO LỆNH: DÒNG TIỀN VÀO LẠI SAU CÚ RŨ HÀNG BẬC THANG
+  async sendShakeoutReentryAlert(payload: ShakeoutReentryAlertPayload): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+
+    const lines: string[] = [
+      '🔥 👑 🟢 <b>[TÍN HIỆU VÀO LỆNH: DÒNG TIỀN VÀO LẠI SAU CÚ RŨ BẬC THANG]</b>',
+      '🚀 <b>CÁ MẠP ĐÃ HẤP THỤ XONG - BẮT ĐẦU PHA ĐẨY TIẾP DIỄN SÓNG TĂNG</b>',
+      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ:</b> <b>${payload.forecastScore}/100</b> (Winrate dự kiến: <b>${payload.estimatedWinRate}%+</b>)`,
+      '----------------------------------------',
+      '📊 <b>DÒNG TIỀN VÀO LẠI CỰC MẠNH:</b>',
+      `• <b>Dòng Tiền Mua Ròng 1m:</b> <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code> 🟢`,
+      `• <b>Lực Mua Chủ Động Taker:</b> <code>${payload.takerBuyPct1m.toFixed(1)}%</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
+      `• <b>Dòng Tiền 3 Phút:</b> <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> (Đã nuốt trọn cây xả rũ hàng)`,
+      `• <b>Hồi Phục:</b> Giá đã lấy lại <code>+${payload.recoveryPct.toFixed(2)}%</code> từ đáy rũ (<code>$${payload.shakeoutLow}</code>)`,
+      '----------------------------------------',
+      '🎯 <b>KẾ HOẠCH GIAO DỊCH VIP:</b>',
+      `• <b>Vào Lệnh (Entry Long):</b> <code>$${payload.entryPrice}</code> (Vào ngay khi dòng tiền quay lại!)`,
+      `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
+      `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Gồng tiếp tục con sóng tăng)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy cây nến rũ hàng)`,
+      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
+      '----------------------------------------',
+      `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
+      '----------------------------------------',
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế LONG Trên Binance Futures</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
+  }
+
 
   // THÔNG BÁO HẾT NGON (CHỈ BÁO CHO COIN ĐÃ TỪNG DỰ BÁO NGON - DỰA TRÊN NHIỀU NẾN - THÔNG BÁO DUY NHẤT 1 LẦN)
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
