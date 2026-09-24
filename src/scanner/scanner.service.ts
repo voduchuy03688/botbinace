@@ -287,8 +287,8 @@ export class ScannerService implements OnApplicationBootstrap {
     if (bodyRatio >= 0.7 && upperWickRatio <= 0.1) score += 8;
 
     const forecastScore = Math.min(99, Math.round(score));
-    // CHỈ THÔNG BÁO LỆNH CỰC KÌ NGON ĂN CHẮC WINRATE >= 95%
-    if (forecastScore < 95) return false;
+    // CHỈ THÔNG BÁO LỆNH CỰC KÌ NGON ĂN CHẮC WINRATE >= 90%
+    if (forecastScore < 90) return false;
 
     // BẢO ĐẢM RỦI RO CỰC THẤP: Khoảng cách cắt lỗ SL phải <= 1.35%
     const suggestedSl = baseMinLow * 0.996; // Cắt lỗ ngay dưới đáy nền tích lũy
