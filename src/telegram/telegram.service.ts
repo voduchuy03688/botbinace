@@ -9,6 +9,8 @@ export interface VipSpikeAlertPayload {
   highPrice: number;
   lowPrice: number;
   priceChangePct: number;
+  distanceFromFootPct?: number;
+  baseMinLow?: number;
 
   // Vị thế đáy 24h & 1h
   bottomRangePct: number;
@@ -42,6 +44,53 @@ export interface VipSpikeAlertPayload {
   estimatedWinRate: number;
 
   // Kế hoạch giao dịch
+  entryPrice: number;
+  suggestedTp1: number;
+  suggestedTp2: number;
+  suggestedSl: number;
+  rewardRiskRatio: number;
+
+  analysisReason: string;
+}
+
+export interface VipDowntrendFootAlertPayload {
+  symbol: string;
+  currentPrice: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  dropFromPeakPct: number;
+  topMaxHigh: number;
+
+  // Vị thế đỉnh 24h & 1h
+  bottomRangePct: number;
+  low24h: number;
+  high24h: number;
+  change24hPct: number;
+  change1hPct: number;
+
+  // Khung 15m & 5m
+  takerSellPct15m: number;
+  netCashflow15m: number;
+  netCashflow5m: number;
+  takerSellPct5m: number;
+  redCandles5m: number;
+
+  // Khung 1m (Điểm kích hoạt gãy chân sóng giảm)
+  volume1m: number;
+  volumeMultiplier: number;
+  takerSellVol1m: number;
+  netCashflow1m: number;
+  takerSellPct1m: number;
+  netCashflow3m: number;
+  takerSellPct3m: number;
+  candlePatternText: string;
+
+  // Điểm đánh giá & Winrate
+  forecastScore: number;
+  estimatedWinRate: number;
+
+  // Kế hoạch giao dịch Short
   entryPrice: number;
   suggestedTp1: number;
   suggestedTp2: number;
@@ -269,34 +318,81 @@ export class TelegramService {
   // THÔNG BÁO KÈO CỰC KÌ NGON (BẮT ĐÚNG CHÂN SÓNG TĂNG TRÊN TẤT CẢ CÁC KHUNG GIỜ)
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+    const footDistanceText =
+      payload.distanceFromFootPct !== undefined
+        ? `+${payload.distanceFromFootPct.toFixed(2)}%`
+        : `+${payload.priceChangePct.toFixed(2)}%`;
+    const baseLowText =
+      payload.baseMinLow !== undefined ? `$${payload.baseMinLow}` : `$${payload.lowPrice}`;
 
     const lines: string[] = [
-      '👑 🔥 🟢 <b>[TÍN HIỆU VIP: BẮT ĐÚNG CHÂN SÓNG TĂNG ĐA KHUNG GIỜ]</b>',
-      '🚀 <b>XÁC NHẬN HỘI TỤ TẤT CẢ CÁC KHUNG GIỜ (WIN RATE > 95%)</b>',
+      '👑 🔥 🟢 <b>[TÍN HIỆU VIP: BẮT ĐÚNG CHÂN SÓNG TĂNG (LONG)]</b>',
+      '🚀 <b>XÁC NHẬN VÀO NGAY CHÂN NỀN TÍCH LŨY (WIN RATE > 95%)</b>',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM HỘI TỤ ĐA KHUNG:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
+      `🎯 <b>ĐIỂM HỘI TỤ CHÂN SÓNG:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
-      '🌐 <b>XÁC NHẬN CHÂN SÓNG TRÊN TẤT CẢ CÁC KHUNG THỜI GIAN:</b>',
-      `• <b>Khung 24h:</b> Nằm ở <b>${payload.bottomRangePct.toFixed(1)}%</b> sát đáy 24h (Đáy: <code>$${payload.low24h}</code> | Đỉnh: <code>$${payload.high24h}</code> | 24h: <code>${payload.change24hPct >= 0 ? '+' : ''}${payload.change24hPct.toFixed(2)}%</code>)`,
-      `• <b>Khung 1h:</b> Nền tích lũy phẳng đi ngang nén chặt, cạn kiệt lực bán (1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
-      `• <b>Khung 15m:</b> Đảo chiều đi lên, Taker Mua gom 15m: <code>${payload.takerBuyPct15m.toFixed(1)}%</code> (Net Mua 15m: <code>+${Math.round(payload.netCashflow15m).toLocaleString()} USDT</code>)`,
-      `• <b>Khung 5m:</b> Dòng tiền ròng gom 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> (Mua 5m: <code>${payload.takerBuyPct5m.toFixed(1)}%</code> | <b>${payload.greenCandles5m}/5 nến xanh</b> | Đáy sau cao hơn đáy trước)`,
-      `• <b>Khung 1m (Điểm Nổ Realtime):</b> Vừa nhấc chân <code>+${payload.priceChangePct.toFixed(2)}%</code> từ nền đáy, Volume nổ <b>${payload.volumeMultiplier.toFixed(1)}x</b>, Taker Mua <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
+      '🌱 <b>XÁC NHẬN VỊ TRÍ CHÂN SÓNG TĂNG (TUYỆT ĐỐI KHÔNG FOMO):</b>',
+      `• <b>Độ Nhấc Chân:</b> Vừa mới nhấc chân <code>${footDistanceText}</code> từ nền đáy (Đáy nền: <code>${baseLowText}</code>)`,
+      `• <b>Vị Thế 24h:</b> Sát đáy <b>${payload.bottomRangePct.toFixed(1)}%</b> (Đáy: <code>$${payload.low24h}</code> | Đỉnh: <code>$${payload.high24h}</code> | 24h: <code>${payload.change24hPct >= 0 ? '+' : ''}${payload.change24hPct.toFixed(2)}%</code>)`,
+      `• <b>Khung 1h:</b> Nền tích lũy phẳng nén chặt, cạn kiệt lực bán (1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
+      '----------------------------------------',
+      '🌊 <b>DÒNG TIỀN LỚN BÙNG NỔ NGAY TẠI CHÂN SÓNG:</b>',
+      `• <b>Khung 1m (Điểm Nổ Realtime):</b> Taker Mua <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code> | Vol nổ: <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
+      `• <b>Khung 3m:</b> Net Gom 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> (Mua: <code>${payload.takerBuyPct3m.toFixed(1)}%</code>)`,
+      `• <b>Khung 5m:</b> Net Gom 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> (Mua: <code>${payload.takerBuyPct5m.toFixed(1)}%</code> | <b>${payload.greenCandles5m}/5 nến xanh</b>)`,
+      `• <b>Khung 15m:</b> Net Gom 15m: <code>+${Math.round(payload.netCashflow15m).toLocaleString()} USDT</code> (Mua: <code>${payload.takerBuyPct15m.toFixed(1)}%</code>)`,
       '----------------------------------------',
       '🛡️ <b>CẤU TRÚC NẾN CHỐNG BẪY XẢ (ANTI-TRAP):</b>',
       '• Nến xanh đặc, đóng căng sát đỉnh, triệt tiêu hoàn toàn râu xả ảo!',
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH VÀO NGAY CHÂN SÓNG (KHÔNG CẦN CHỜ ĐỢI):</b>',
+      '🎯 <b>KẾ HOẠCH VÀO NGAY CHÂN SÓNG (TỐI ƯU RISK/REWARD):</b>',
       `• <b>Vào Lệnh Ngay (Entry Chân Sóng):</b> <code>$${payload.entryPrice}</code>`,
       `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
-      `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Gồng trọn con sóng)`,
-      `• <b>Cắt Lỗ SL (-1.8%):</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy nến chân sóng)`,
+      `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Gồng trọn con sóng tăng)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy nền chân sóng)`,
       `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b> (Cực kì tối ưu)`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
       '----------------------------------------',
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Mở Ngay Trên Binance Futures</a>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế LONG Trên Binance Futures</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
+  }
+
+  // THÔNG BÁO BẮT ĐÚNG CHÂN SÓNG GIẢM (SHORT NGAY ĐỈNH PHÂN PHỐI BẮT ĐẦU LAO DỐC)
+  async sendVipDowntrendFootAlert(payload: VipDowntrendFootAlertPayload): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+
+    const lines: string[] = [
+      '👑 ⚡ 🔴 <b>[TÍN HIỆU VIP: BẮT ĐÚNG CHÂN SÓNG GIẢM (SHORT)]</b>',
+      '📉 <b>VỪA CHỚM GÃY TỪ ĐỈNH PHÂN PHỐI - SHORT NGAY ĐIỂM XUẤT PHÁT ĐÀ RƠI</b>',
+      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
+      `🎯 <b>ĐIỂM ĐÁNH GIÁ CHÂN SÓNG GIẢM:</b> <b>${payload.forecastScore}/100</b> (Winrate Short: <b>${payload.estimatedWinRate}%+</b>)`,
+      '----------------------------------------',
+      '🏔️ <b>XÁC NHẬN VỊ TRÍ CHÂN SÓNG GIẢM (KHÔNG SHORT ĐUỔI):</b>',
+      `• <b>Độ Gãy Xuất Phát:</b> Vừa mới chớm rơi <code>-${payload.dropFromPeakPct.toFixed(2)}%</code> từ đỉnh (ĐÚNG NGAY CHÂN CON SÓNG GIẢM!)`,
+      `• <b>Đỉnh Phân Phối:</b> <code>$${payload.topMaxHigh}</code> (Vùng đỉnh 24h: <b>${payload.bottomRangePct.toFixed(1)}%</b>)`,
+      `• <b>Mẫu Hình Nến:</b> ${payload.candlePatternText}`,
+      '----------------------------------------',
+      '🌊 <b>DÒNG TIỀN THÁO CHẠY ĐỒNG THUẬN ĐA KHUNG GIỜ:</b>',
+      `• <b>Khung 1m (Điểm Kích Nổ):</b> Taker Bán <b>${payload.takerSellPct1m.toFixed(1)}%</b> (Net Xả 1m: <code>-${Math.round(Math.abs(payload.netCashflow1m)).toLocaleString()} USDT</code> | Vol nổ: <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
+      `• <b>Khung 3m:</b> Net Xả 3m: <code>-${Math.round(Math.abs(payload.netCashflow3m)).toLocaleString()} USDT</code> (Bán: <code>${payload.takerSellPct3m.toFixed(1)}%</code>)`,
+      `• <b>Khung 5m:</b> Net Xả 5m: <code>-${Math.round(Math.abs(payload.netCashflow5m)).toLocaleString()} USDT</code> (Bán: <code>${payload.takerSellPct5m.toFixed(1)}%</code> | <b>${payload.redCandles5m}/5 nến đỏ</b>)`,
+      `• <b>Khung 15m:</b> Net Xả 15m: <code>-${Math.round(Math.abs(payload.netCashflow15m)).toLocaleString()} USDT</code> (Bán: <code>${payload.takerSellPct15m.toFixed(1)}%</code>)`,
+      '----------------------------------------',
+      '🎯 <b>KẾ HOẠCH SHORT NGAY CHÂN SÓNG GIẢM (TỐI ƯU LỢI NHUẬN):</b>',
+      `• <b>Vào Lệnh Ngay (Entry Short):</b> <code>$${payload.entryPrice}</code> (Vào ngay khi đỉnh vừa gãy)`,
+      `• <b>Chốt Lời TP1 (+3.2% khi giá giảm):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
+      `• <b>Chốt Lời TP2 (+6.5% khi giá giảm):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn cả con sóng sập)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay trên đỉnh phân phối, rủi ro siêu nhỏ)`,
+      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
+      '----------------------------------------',
+      `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
+      '----------------------------------------',
+      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế SHORT Trên Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));

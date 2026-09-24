@@ -109,6 +109,21 @@ export class BinanceService {
     });
   }
 
+  // Lọc nhanh các token đang nằm trong VÙNG ĐỈNH PHÂN PHỐI (Top/Resistance Zone - Chuẩn bị chân sóng giảm)
+  getTopZoneCandidates(
+    minBottomPct = 58,
+    min24hChange = -3.0,
+    max24hChange = 25.0,
+  ): Ticker24hData[] {
+    return Array.from(this.ticker24hMap.values()).filter((t) => {
+      return (
+        t.bottomRangePct >= minBottomPct &&
+        t.priceChangePercent >= min24hChange &&
+        t.priceChangePercent <= max24hChange
+      );
+    });
+  }
+
   async getActiveSymbolsByVolume(): Promise<string[]> {
     if (this.ticker24hMap.size === 0) {
       await this.refreshTickers24h();
