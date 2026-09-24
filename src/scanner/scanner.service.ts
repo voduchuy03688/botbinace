@@ -114,6 +114,20 @@ export class ScannerService implements OnApplicationBootstrap {
     const takerBuyAcceleration = avgTakerBuyVol > 0 ? takerBuyVol / avgTakerBuyVol : 0;
     const wasQuietVolumeBefore = prevCandle ? (prevCandle.quoteVolume <= avgVolume * 1.6) : true;
 
+    // 1b. Dòng Tiền Tích Lũy 5 Phút (Multi-candle Steady Cashflow Inflow)
+    const last5Klines = klines.slice(-5);
+    const netCashflow5m = last5Klines.reduce((sum, k) => {
+      const buy = k.takerBuyQuoteVolume;
+      const sell = Math.max(0, k.quoteVolume - buy);
+      return sum + (buy - sell);
+    }, 0);
+    const totalVol5m = last5Klines.reduce((sum, k) => sum + k.quoteVolume, 0);
+    const totalTakerBuy5m = last5Klines.reduce((sum, k) => sum + k.takerBuyQuoteVolume, 0);
+    const takerBuyPct5m = totalVol5m > 0 ? (totalTakerBuy5m / totalVol5m) * 100 : 50;
+
+    const price5mAgo = klines[klines.length - 6]?.close || klines[0].close;
+    const priceChange5mPct = price5mAgo > 0 ? ((currentPrice - price5mAgo) / price5mAgo) * 100 : 0;
+
     // 2. Xu hướng 1h
     const kline1hAgo = klines[0];
     const change1hPct =
@@ -185,6 +199,9 @@ export class ScannerService implements OnApplicationBootstrap {
             forecastScore: 90,
             change1hPct,
             reasonText,
+            netCashflow5m,
+            priceChange5mPct,
+            takerBuyPct5m,
           };
 
           this.logger.warn(`🛑 [HET NGON] ${symbol} (${hetNgonPattern}) -> Reason: ${reasonText}`);
@@ -210,7 +227,7 @@ export class ScannerService implements OnApplicationBootstrap {
       }
     }
 
-    // --- 5. BẮT ĐẦU CHÂN SÓNG TĂNG (BẮN TÍN HIỆU NGAY LẬP TỨC REALTIME) ---
+    // --- 5. BẮT ĐẦU CHÂN SÓNG TĂNG & DÒNG TIỀN MUA GOM (BẮN TÍN HIỆU NGAY LẬP TỨC REALTIME) ---
     const lastSymbolAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastSymbolAlert < 10 * 60 * 1000) return;
     if (now - this.lastGlobalAlertTime < 2 * 1000) return; // Chi cho 2 giay buffer API Telegram
@@ -221,22 +238,34 @@ export class ScannerService implements OnApplicationBootstrap {
 
     if (change1hPct !== undefined && change1hPct >= 9.0) return; // Tranh du dinh
 
-    let patternType: 'CHAN_SONG' | null = null;
+    let patternType: 'CHAN_SONG' | 'DONG_TIEN_GOM_TANG' | null = null;
     let qualityTier: 'CUC_KI_NGON' | 'NGON' | null = null;
 
+    // Pattern A: Bứt phá chân sóng 1m (1m Spike)
     if (pumpSpikePct >= 1.5 && takerBuyPct >= 78 && netCashflow >= 100000 && takerBuyAcceleration >= 4.5 && isQuietBase) {
       patternType = 'CHAN_SONG';
       qualityTier = 'CUC_KI_NGON';
     } else if (pumpSpikePct >= 1.4 && takerBuyPct >= 70 && netCashflow >= 50000 && takerBuyAcceleration >= 3.0 && isQuietBase) {
       patternType = 'CHAN_SONG';
       qualityTier = 'NGON';
+    } 
+    // Pattern B: Dòng tiền Mua bơm vào đẩy giá từ từ liên tục 5m (Steady Cashflow Accumulation)
+    else if (priceChange5mPct >= 0.8 && priceChange5mPct <= 5.0 && takerBuyPct5m >= 68 && netCashflow5m >= 80000) {
+      patternType = 'DONG_TIEN_GOM_TANG';
+      qualityTier = netCashflow5m >= 150000 && takerBuyPct5m >= 75 ? 'CUC_KI_NGON' : 'NGON';
     }
 
     if (patternType && qualityTier) {
       let score = 55;
-      score += Math.min(25, (takerBuyAcceleration / 5.0) * 25);
-      score += Math.min(10, ((takerBuyPct - 50) / 30.0) * 10);
-      score += Math.min(10, (netCashflow / 200000) * 10);
+      if (patternType === 'DONG_TIEN_GOM_TANG') {
+        score += Math.min(25, (netCashflow5m / 200000) * 25);
+        score += Math.min(10, ((takerBuyPct5m - 50) / 30.0) * 10);
+        score += Math.min(10, (priceChange5mPct / 3.0) * 10);
+      } else {
+        score += Math.min(25, (takerBuyAcceleration / 5.0) * 25);
+        score += Math.min(10, ((takerBuyPct - 50) / 30.0) * 10);
+        score += Math.min(10, (netCashflow / 200000) * 10);
+      }
 
       const forecastScore = Math.min(100, Math.round(score));
 
@@ -282,6 +311,9 @@ export class ScannerService implements OnApplicationBootstrap {
         suggestedTp2,
         suggestedSl,
         change1hPct,
+        netCashflow5m,
+        priceChange5mPct,
+        takerBuyPct5m,
       };
 
       this.logger.warn(

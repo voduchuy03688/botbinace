@@ -4,7 +4,7 @@ import axios from 'axios';
 
 export interface TieredAlertPayload {
   symbol: string;
-  patternType: 'CHAN_SONG' | 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT';
+  patternType: 'CHAN_SONG' | 'DONG_TIEN_GOM_TANG' | 'HET_NGON_STAGNANT' | 'HET_NGON_SELL_OUT';
   qualityTier?: 'CUC_KI_NGON' | 'NGON';
   
   priceChangePct: number;
@@ -30,6 +30,10 @@ export interface TieredAlertPayload {
   suggestedSl?: number;
   change1hPct?: number;
   reasonText?: string;
+  
+  netCashflow5m?: number;
+  priceChange5mPct?: number;
+  takerBuyPct5m?: number;
 }
 
 export interface AccumulationReportItem {
@@ -127,6 +131,9 @@ export class TelegramService {
     } else if (payload.patternType === 'HET_NGON_SELL_OUT') {
       header = '💰 🔴 <b>[THÔNG BÁO: HẾT NGON - CÁ MẠP BÁN XẢ / CHỐT LỜI LẬP TỨC]</b>';
       analysisNote = '🚨 <i>Phân tích: Lực Bán Taker xả tháo mạnh hoặc giá rút chân khỏi đỉnh $\\rightarrow$ CHỐT LỜI NGAY HOẶC HỦY THEO DÕI, KHÔNG VÀO NỮA!</i>';
+    } else if (payload.patternType === 'DONG_TIEN_GOM_TANG') {
+      header = '🌊 🟢 <b>[CÁ MẠP GOM HÀNG: DÒNG TIỀN MUA TĂNG TỪ TỪ]</b>';
+      analysisNote = '💡 <i>Phân tích: Dòng tiền Mua ròng bơm liên tục trong 5-15 phút, giá đẩy từ từ không giật ảo $\\rightarrow$ Đang hình thành chân sóng đẩy bền vững!</i>';
     } else {
       if (isCucKiNgon) {
         header = '🚀 🔥 🟢 <b>[CỰC KÌ NGON: BẮT ĐẦU CHÂN SÓNG TĂNG (WIN RATE >= 90%)]</b>';
@@ -145,14 +152,16 @@ export class TelegramService {
       !isHetNgon ? `🎯 <b>ĐIỂM ĐÁNH GIÁ CHUẨN:</b> <b>${payload.forecastScore}/100</b> (${isCucKiNgon ? 'Kèo VIP Cực Khủng' : 'Kèo Chuẩn'})` : '',
       analysisNote,
       `----------------------------------------`,
-      `📊 <b>TRẠNG THÁI DÒNG TIỀN (1 PHÚT):</b>`,
-      `• <b>Dòng Tiền Ròng (Net Flow):</b> <code>${payload.netCashflow >= 0 ? '+' : ''}${Math.round(payload.netCashflow).toLocaleString()} USDT</code>`,
-      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
-      `• <b>Lực Bán Chủ Động (Taker Sell):</b> <code>${(100 - payload.takerBuyPct).toFixed(1)}%</code> (${Math.round(payload.takerSellVol).toLocaleString()} USDT)`,
+      `📊 <b>TRẠNG THÁI DÒNG TIỀN:</b>`,
+      `• <b>Dòng Tiền Ròng (Net Flow 1m):</b> <code>${payload.netCashflow >= 0 ? '+' : ''}${Math.round(payload.netCashflow).toLocaleString()} USDT</code>`,
+      payload.netCashflow5m !== undefined ? `• <b>Dòng Tiền Ròng Mua 5m:</b> <code>${payload.netCashflow5m >= 0 ? '+' : ''}${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> (Mua 5m: <code>${payload.takerBuyPct5m?.toFixed(1)}%</code>)` : '',
+      `• <b>Lực Mua Chủ Động (Taker Buy 1m):</b> <code>${payload.takerBuyPct.toFixed(1)}%</code> (${Math.round(payload.takerBuyVol).toLocaleString()} USDT)`,
+      `• <b>Lực Bán Chủ Động (Taker Sell 1m):</b> <code>${(100 - payload.takerBuyPct).toFixed(1)}%</code> (${Math.round(payload.takerSellVol).toLocaleString()} USDT)`,
       `• <b>Tổng Volume 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b>)`,
       `----------------------------------------`,
       `📈 <b>GIÁ VÀ BIẾN ĐỘNG:</b>`,
       `• <b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code> (Mở: <code>$${payload.openPrice}</code> | Cao nhất: <code>$${payload.highPrice}</code>)`,
+      payload.priceChange5mPct !== undefined ? `• <b>Tăng từ từ trong 5m:</b> <code>${payload.priceChange5mPct >= 0 ? '+' : ''}${payload.priceChange5mPct.toFixed(2)}%</code>` : '',
       payload.change1hPct !== undefined ? `• <b>Xu hướng 1 giờ:</b> <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>` : '',
     ];
 
