@@ -12,24 +12,33 @@ export interface VipSpikeAlertPayload {
   distanceFromFootPct?: number;
   baseMinLow?: number;
 
-  // Vị thế đáy 24h & 1h
+  // HỘI TỤ ĐỒNG THUẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ
+  // 1. Chân Sóng 24h
   bottomRangePct: number;
   low24h: number;
   high24h: number;
   change24hPct: number;
-  change1hPct: number;
 
-  // Khung 15m
+  // 2. Chân Sóng 1h
+  change1hPct: number;
+  foot1hPct: number;
+  status1hText: string;
+
+  // 3. Chân Sóng 15m
+  distanceFromFoot15mPct: number;
+  baseLow15m: number;
+  foot15mPct: number;
+  status15mText: string;
   takerBuyPct15m: number;
   netCashflow15m: number;
 
-  // Khung 5m
+  // 4. Chân Sóng 5m
   netCashflow5m: number;
   takerBuyPct5m: number;
   priceChange5mPct: number;
   greenCandles5m: number;
 
-  // Khung 1m (Điểm kích nổ chân sóng)
+  // 5. Chân Sóng 1m (Điểm kích nổ realtime)
   volume1m: number;
   takerBuyVol1m: number;
   takerSellVol1m: number;
@@ -154,8 +163,8 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO CỰC KÌ NGON: BẮT NGAY CHÂN SÓNG TĂNG (RỦI RO THẤP - ĂN NHIỀU)
-  // Chỉ gửi thông báo khi token đang ở đáy bắt đầu đi lên & Dòng tiền nổ cực mạnh
+  // THÔNG BÁO CỰC KÌ NGON: BẮT ĐÚNG CHÂN SÓNG ĐA KHUNG GIỜ (RỦI RO THẤP - ĂN NHIỀU)
+  // Xác nhận đồng thuận chân sóng ở TẤT CẢ CÁC KHUNG: 1m, 5m, 15m, 1h, 24h
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
@@ -171,28 +180,30 @@ export class TelegramService {
         : '1.20';
 
     const lines: string[] = [
-      '🔥 👑 💎 <b>[THÔNG BÁO CỰC KÌ NGON: BẮT NGAY CHÂN SÓNG TĂNG]</b>',
-      '🛡️ <b>ĐANG Ở ĐÁY BẮT ĐẦU ĐI LÊN - RỦI RO THẤP - ĂN NHIỀU</b>',
-      '🌟 <b>TỈ LỆ THẮNG WINRATE > 95% - VÀO LÀ ĂN!</b>',
+      '🔥 👑 💎 <b>[THÔNG BÁO CỰC KÌ NGON: BẮT ĐÚNG CHÂN SÓNG ĐA KHUNG GIỜ]</b>',
+      '🛡️ <b>ĐỒNG THUẬN TẤT CẢ CÁC CHÂN: 1M - 5M - 15M - 1H - 24H</b>',
+      '🌟 <b>VÙNG ĐÁY BẮT ĐẦU ĐI LÊN - RỦI RO THẤP - ĂN NHIỀU - WINRATE > 95%</b>',
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM CHÂN SÓNG HOÀN HẢO:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
+      `🎯 <b>ĐIỂM CHÂN SÓNG TỔNG HỢP:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
-      '🌱 <b>VỊ THẾ CHÂN SÓNG (ĐANG Ở ĐÁY BẮT ĐẦU ĐI LÊN):</b>',
-      `• <b>Điểm Vào Chân Sóng:</b> Vừa nhấc chân <code>${footDistanceText}</code> từ nền đáy (Đáy gom: <code>${baseLowText}</code>)`,
-      `• <b>Vị Thế Đáy 24h:</b> Nằm sát đáy <b>${payload.bottomRangePct.toFixed(1)}%</b> của cả ngày (Đáy: <code>$${payload.low24h}</code> | Đỉnh: <code>$${payload.high24h}</code>)`,
-      `• <b>Khung Giờ Lớn:</b> Tích lũy cạn cung, cấu trúc nén chặt và bắt đầu bung sóng tăng dứt khoát`,
+      '👣 <b>XÁC NHẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ (MULTI-TIMEFRAME):</b>',
+      `• <b>Chân Sóng 24h:</b> Sát đáy <b>${payload.bottomRangePct.toFixed(1)}%</b> của cả ngày (Đáy 24h: <code>$${payload.low24h}</code> | Đỉnh 24h: <code>$${payload.high24h}</code>)`,
+      `• <b>Chân Sóng 1h:</b> ${payload.status1hText} (Nằm ở <b>${payload.foot1hPct.toFixed(1)}%</b> đáy khung 1h | 1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
+      `• <b>Chân Sóng 15m:</b> ${payload.status15mText} (Cách đáy 15m: <code>+${payload.distanceFromFoot15mPct.toFixed(2)}%</code> | Đáy 15m: <code>$${payload.baseLow15m}</code>)`,
+      `• <b>Chân Sóng 5m:</b> Nâng đáy đi lên (Net gom 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> | <b>${payload.greenCandles5m}/5 nến xanh</b>)`,
+      `• <b>Chân Sóng 1m (Điểm Kích Nổ):</b> Vừa nhấc chân <code>${footDistanceText}</code> khỏi nền đáy 1m (<code>${baseLowText}</code>)`,
       '----------------------------------------',
       '🌊 <b>DÒNG TIỀN VÀO CỰC KỲ MẠNH (CÁ MẬP VÀO HÀNG):</b>',
+      `• <b>Khối Lượng 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
       `• <b>Lực Mua Chủ Động 1m:</b> Taker Mua <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net gom 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
-      `• <b>Đột Biến Khối Lượng:</b> Gấp <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần trung bình nền tích lũy`,
-      `• <b>Dòng Tiền Đa Khung:</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code>`,
+      `• <b>Dòng Tiền Đa Khung:</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> | Net 15m: <code>+${Math.round(payload.netCashflow15m).toLocaleString()} USDT</code>`,
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH VÀO LỆNH (RỦI RO THẤP - ĂN NHIỀU):</b>',
+      '🎯 <b>KẾ HOẠCH VÀO LỆNH (RỦI RO CỰC THẤP - ĂN NHIỀU):</b>',
       `• <b>Vào Lệnh Ngay (Entry Chân Sóng):</b> <code>$${payload.entryPrice}</code>`,
       `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn con sóng lớn)`,
-      `• <b>Cắt Lỗ SL Cực Sát:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Rủi ro chỉ <b>-${riskDistance}%</b>, an toàn tuyệt đối)`,
+      `• <b>Cắt Lỗ SL Cực Sát:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Rủi ro chỉ <b>-${riskDistance}%</b>, ngay dưới đáy nền)`,
       `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b> (Mất cực ít - Ăn cực nhiều)`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,

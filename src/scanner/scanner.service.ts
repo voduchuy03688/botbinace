@@ -211,19 +211,71 @@ export class ScannerService implements OnApplicationBootstrap {
     const greenCandles5m = last5Klines.filter((k) => k.close >= k.open).length;
     if (takerBuyPct5m < 68 || netCashflow5m < 200_000 || greenCandles5m < 3) return false;
 
-    const last15Klines = klines.slice(n - 15);
-    const vol15m = last15Klines.reduce((s, k) => s + k.quoteVolume, 0);
-    const buyVol15m = last15Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
-    const netCashflow15m = buyVol15m - (vol15m - buyVol15m);
-    const takerBuyPct15m = vol15m > 0 ? (buyVol15m / vol15m) * 100 : 50;
-    if (takerBuyPct15m < 60 || netCashflow15m < 0) return false;
+    // =========================================================================
+    // XÁC MINH HỘI TỤ CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ: 15M VÀ 1H
+    // "Chân là tất cả các chân: chân phút, chân 15p, chân 1h, chân tất cả các khung giờ"
+    // =========================================================================
+    const [klines15m, klines1h] = await Promise.all([
+      this.binanceService.getKlines(symbol, '15m', 20),
+      this.binanceService.getKlines(symbol, '1h', 24),
+    ]);
+
+    if (!klines15m || klines15m.length < 10 || !klines1h || klines1h.length < 10) {
+      return false;
+    }
+
+    // 1. KIỂM TRA CHÂN SÓNG KHUNG 15M:
+    const low15mList = klines15m.map((k) => k.low);
+    const high15mList = klines15m.map((k) => k.high);
+    const baseLow15m = Math.min(...low15mList);
+    const maxHigh15m = Math.max(...high15mList);
+    const range15m = maxHigh15m - baseLow15m;
+    const foot15mPct = range15m > 0 ? ((currentPrice - baseLow15m) / range15m) * 100 : 50;
+    const distanceFromFoot15mPct = baseLow15m > 0 ? ((currentPrice - baseLow15m) / baseLow15m) * 100 : 0;
+
+    // Yêu cầu: Khung 15m PHẢI NẰM Ở VÙNG ĐÁY CHÂN SÓNG (cách đáy 15m <= 2.8% và vị trí <= 45% range 15m)
+    if (foot15mPct > 45 || distanceFromFoot15mPct > 2.8) {
+      this.logger.debug(
+        `[${symbol}] Loại bỏ: Không thỏa mãn chân sóng khung 15m (foot15m=${foot15mPct.toFixed(1)}%, dist=${distanceFromFoot15mPct.toFixed(2)}%)`,
+      );
+      return false;
+    }
+
+    // 2. KIỂM TRA CHÂN SÓNG KHUNG 1H:
+    const low1hList = klines1h.map((k) => k.low);
+    const high1hList = klines1h.map((k) => k.high);
+    const baseLow1h = Math.min(...low1hList);
+    const maxHigh1h = Math.max(...high1hList);
+    const range1h = maxHigh1h - baseLow1h;
+    const foot1hPct = range1h > 0 ? ((currentPrice - baseLow1h) / range1h) * 100 : 50;
+
+    // Yêu cầu: Khung 1h PHẢI NẰM Ở VÙNG ĐÁY CHÂN SÓNG (<= 40% range 1h)
+    if (foot1hPct > 40) {
+      this.logger.debug(
+        `[${symbol}] Loại bỏ: Không thỏa mãn chân sóng khung 1h (foot1h=${foot1hPct.toFixed(1)}%)`,
+      );
+      return false;
+    }
+
+    // Dòng tiền 15m thực tế
+    const last3Klines15m = klines15m.slice(-3);
+    const vol15mTotal = last3Klines15m.reduce((s, k) => s + k.quoteVolume, 0);
+    const buy15mTotal = last3Klines15m.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+    const netCashflow15m = buy15mTotal - (vol15mTotal - buy15mTotal);
+    const takerBuyPct15m = vol15mTotal > 0 ? (buy15mTotal / vol15mTotal) * 100 : 50;
+    if (takerBuyPct15m < 55 || netCashflow15m < 0) {
+      return false;
+    }
 
     // Tính điểm đánh giá (Score) đảm bảo ĂN CHẮC WINRATE > 95%
     let score = 70;
-    if (ticker24h.bottomRangePct <= 18) score += 10;
-    else if (ticker24h.bottomRangePct <= 28) score += 6;
+    if (ticker24h.bottomRangePct <= 20) score += 10;
+    else if (ticker24h.bottomRangePct <= 30) score += 6;
 
-    if (distanceFromFootPct <= 0.85) score += 10; // Rất sát chân sóng, cực kì an toàn
+    if (foot1hPct <= 25 && foot15mPct <= 30) score += 10; // Đáy sâu đa khung 1h và 15m
+    else score += 5;
+
+    if (distanceFromFootPct <= 0.85) score += 10; // Rất sát chân sóng 1m
     else score += 5;
 
     if (takerBuyPct1m >= 85 && takerBuyPct5m >= 75) score += 10;
@@ -269,6 +321,9 @@ export class ScannerService implements OnApplicationBootstrap {
     const price5mAgo = klines[n - 6]?.close || klines[0].close;
     const priceChange5mPct = price5mAgo > 0 ? ((currentPrice - price5mAgo) / price5mAgo) * 100 : 0;
 
+    const status1hText = `Tích lũy cạn cung sát đáy 1h, lực bán cạn kiệt`;
+    const status15mText = `Bứt phá thoát đáy 15m, nến 15m nén chặt bật tăng`;
+
     const payload: VipSpikeAlertPayload = {
       symbol,
       currentPrice,
@@ -283,6 +338,12 @@ export class ScannerService implements OnApplicationBootstrap {
       high24h: ticker24h.highPrice,
       change24hPct: ticker24h.priceChangePercent,
       change1hPct,
+      foot1hPct,
+      status1hText,
+      distanceFromFoot15mPct,
+      baseLow15m,
+      foot15mPct,
+      status15mText,
       takerBuyPct15m,
       netCashflow15m,
       volume1m: currentVol1m,
@@ -304,7 +365,7 @@ export class ScannerService implements OnApplicationBootstrap {
       suggestedTp2,
       suggestedSl,
       rewardRiskRatio: 3.2 / riskDistancePct,
-      analysisReason: `LỆNH CỰC KÌ NGON (VÀO LÀ ĂN - WINRATE > 95%): Đang ở đáy 24h (${ticker24h.bottomRangePct.toFixed(1)}%), vừa bứt phá chân sóng +${distanceFromFootPct.toFixed(2)}% từ nền đáy $${baseMinLow} (SL cực sát chỉ -${riskDistancePct.toFixed(2)}%), dòng tiền 5m gom ròng +${Math.round(netCashflow5m).toLocaleString()} USDT, nến 1m bứt phá đóng căng sát đỉnh.`,
+      analysisReason: `ĐỒNG THUẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ (1M, 5M, 15M, 1H, 24H): Sát đáy 24h (${ticker24h.bottomRangePct.toFixed(1)}%), sát đáy 1h (${foot1hPct.toFixed(1)}%), thoát đáy 15m (+${distanceFromFoot15mPct.toFixed(2)}%), nổ volume 1m (+${priceChange1mPct.toFixed(2)}%), SL cực sát đáy nền chỉ -${riskDistancePct.toFixed(2)}%.`,
     };
 
     this.logger.warn(`👑 [LỆNH CỰC KÌ NGON: BẮT NGAY CHÂN SÓNG TĂNG] ${symbol} -> Điểm: ${forecastScore}/100 | SL: -${riskDistancePct.toFixed(2)}%`);
