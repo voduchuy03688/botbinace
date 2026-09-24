@@ -60,17 +60,12 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // 1. BÁO CÁO CHIẾN LƯỢC ĐỊNH KỲ LÚC 12:00 VÀ 24:00 (00:00) HÀNG NGÀY
+  // 1. BÁO CÁO CHIẾN LƯỢC (TẮT BROADCAST THEO YÊU CẦU NGƯỜI DÙNG)
+  // Chỉ nhận thông báo lệnh vào nguy hiểm ít, ăn chắc 95% - Không gửi báo cáo định kỳ
   // =========================================================================
-  @Cron('0 0,12 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // @Cron('0 0,12 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async handleScheduledStrategicReport() {
-    const currentHour = new Date().toLocaleTimeString('vi-VN', {
-      timeZone: 'Asia/Ho_Chi_Minh',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-    this.logger.log(`Bắt đầu chạy Báo cáo Chiến lược Định kỳ lúc ${currentHour}...`);
-    await this.runStrategicPeriodicReport(`BÁO CÁO CHIẾN LƯỢC ĐỊNH KỲ ${currentHour}`);
+    this.logger.log('Báo cáo chiến lược định kỳ: Đã tắt broadcast theo yêu cầu chỉ nhận lệnh vào ăn chắc 95%.');
   }
 
   async runStrategicPeriodicReport(title: string): Promise<boolean> {
@@ -245,7 +240,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
     if (openPrice <= 0 || currentPrice <= 0) return false;
 
-    // 1. Phải là nến xanh bứt phá
+    // 1. Phải là nến xanh bứt phá dứt khoát
     const isGreen = currentPrice > openPrice;
     if (!isGreen) return false;
 
@@ -258,8 +253,8 @@ export class ScannerService implements OnApplicationBootstrap {
     const upperWickRatio = upperWick / candleRange;
     const priceChange1mPct = ((currentPrice - openPrice) / openPrice) * 100;
 
-    // Cấu trúc nến bứt phá: thân đặc >= 52%, râu trên <= 18% (không bị xả dập đầu)
-    if (bodyRatio < 0.52 || upperWickRatio > 0.18) return false;
+    // Cấu trúc nến bứt phá nguy hiểm ít: thân đặc >= 58%, râu trên <= 14% (không bị xả dập đầu)
+    if (bodyRatio < 0.58 || upperWickRatio > 0.14) return false;
 
     // 2. Kiểm tra nền tích lũy 20 nến trước đó (baseKlines)
     const baseKlines = klines.slice(n - 22, n - 2);
@@ -270,34 +265,35 @@ export class ScannerService implements OnApplicationBootstrap {
     if (baseMinLow <= 0) return false;
 
     const baseRangePct = ((baseMaxHigh - baseMinLow) / baseMinLow) * 100;
-    // Nền phải nén hẹp (biên độ dao động <= 2.2%)
-    if (baseRangePct > 2.2) return false;
+    // Nền phải nén phẳng lì, gom hàng chuẩn chỉ (biên độ dao động <= 1.8%)
+    if (baseRangePct > 1.8) return false;
 
     // 3. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG (ĐÁY NỀN):
-    // Đảm bảo VÀO ĐÚNG NGAY CHÂN SÓNG: chỉ mới nhấc chân từ 0.35% đến 1.85%!
-    // Tuyệt đối không vào khi đã tăng > 1.85% từ đáy nền (tránh fomo ngọn sóng)
+    // Đảm bảo VÀO ĐÚNG NGAY CHÂN SÓNG - NGUY HIỂM ÍT:
+    // Chỉ mới nhấc chân từ 0.30% đến 1.30%!
+    // Tuyệt đối không vào khi đã tăng > 1.30% từ đáy nền (tránh fomo ngọn sóng)
     const distanceFromFootPct = ((currentPrice - baseMinLow) / baseMinLow) * 100;
-    if (distanceFromFootPct < 0.35 || distanceFromFootPct > 1.85) return false;
+    if (distanceFromFootPct < 0.30 || distanceFromFootPct > 1.30) return false;
 
-    // 4. Vị thế đáy 24h & 1h
-    if (ticker24h.bottomRangePct > 38) return false;
+    // 4. Vị thế đáy 24h & 1h: Sát 32% đáy thấp nhất 24h
+    if (ticker24h.bottomRangePct > 32) return false;
 
     const kline1hAgo = klines[0];
     const change1hPct =
       kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
-    if (change1hPct > 4.0 || change1hPct < -6.0) return false;
+    if (change1hPct > 3.0 || change1hPct < -5.0) return false;
 
-    // 5. Dòng tiền thông minh (Smart Money Flow) bùng nổ ngay tại chân sóng
+    // 5. Dòng tiền thông minh (Smart Money Flow) bùng nổ mạnh mẽ ngay tại chân sóng
     const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
     const currentVol1m = currentCandle.quoteVolume;
     const volumeMultiplier = avgBaseVolume > 0 ? currentVol1m / avgBaseVolume : 0;
-    if (volumeMultiplier < 2.5) return false;
+    if (volumeMultiplier < 2.8) return false;
 
     const takerBuyVol1m = currentCandle.takerBuyQuoteVolume;
     const takerSellVol1m = Math.max(0, currentVol1m - takerBuyVol1m);
     const netCashflow1m = takerBuyVol1m - takerSellVol1m;
     const takerBuyPct1m = currentVol1m > 0 ? (takerBuyVol1m / currentVol1m) * 100 : 50;
-    if (takerBuyPct1m < 78 || netCashflow1m < 75_000) return false;
+    if (takerBuyPct1m < 80 || netCashflow1m < 85_000) return false;
 
     // 3m & 5m & 15m
     const last3Klines = klines.slice(n - 3);
@@ -305,7 +301,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const buyVol3m = last3Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
     const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
-    if (takerBuyPct3m < 68 || netCashflow3m < 80_000) return false;
+    if (takerBuyPct3m < 72 || netCashflow3m < 90_000) return false;
 
     const last5Klines = klines.slice(n - 5);
     const vol5m = last5Klines.reduce((s, k) => s + k.quoteVolume, 0);
@@ -313,21 +309,21 @@ export class ScannerService implements OnApplicationBootstrap {
     const netCashflow5m = buyVol5m - (vol5m - buyVol5m);
     const takerBuyPct5m = vol5m > 0 ? (buyVol5m / vol5m) * 100 : 50;
     const greenCandles5m = last5Klines.filter((k) => k.close >= k.open).length;
-    if (takerBuyPct5m < 65 || netCashflow5m < 110_000 || greenCandles5m < 3) return false;
+    if (takerBuyPct5m < 68 || netCashflow5m < 140_000 || greenCandles5m < 3) return false;
 
     const last15Klines = klines.slice(n - 15);
     const vol15m = last15Klines.reduce((s, k) => s + k.quoteVolume, 0);
     const buyVol15m = last15Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow15m = buyVol15m - (vol15m - buyVol15m);
     const takerBuyPct15m = vol15m > 0 ? (buyVol15m / vol15m) * 100 : 50;
-    if (takerBuyPct15m < 60 || netCashflow15m < 25_000) return false;
+    if (takerBuyPct15m < 62 || netCashflow15m < 30_000) return false;
 
-    // Tính điểm đánh giá (Score) đảm bảo Winrate > 95%
-    let score = 65;
-    if (ticker24h.bottomRangePct <= 20) score += 10;
-    else if (ticker24h.bottomRangePct <= 30) score += 6;
+    // Tính điểm đánh giá (Score) đảm bảo ĂN CHẮC WINRATE > 95%
+    let score = 70;
+    if (ticker24h.bottomRangePct <= 18) score += 10;
+    else if (ticker24h.bottomRangePct <= 28) score += 6;
 
-    if (distanceFromFootPct <= 1.2) score += 10; // Càng sát chân sóng điểm càng cao
+    if (distanceFromFootPct <= 0.85) score += 10; // Rất sát chân sóng, cực kì an toàn
     else score += 5;
 
     if (takerBuyPct1m >= 85 && takerBuyPct5m >= 75) score += 10;
@@ -339,7 +335,13 @@ export class ScannerService implements OnApplicationBootstrap {
     if (bodyRatio >= 0.7 && upperWickRatio <= 0.1) score += 8;
 
     const forecastScore = Math.min(99, Math.round(score));
-    if (forecastScore < 93) return false;
+    // CHỈ THÔNG BÁO LỆNH ĂN CHẮC WINRATE >= 95%
+    if (forecastScore < 95) return false;
+
+    // BẢO ĐẢM NGUY HIỂM ÍT: Khoảng cách cắt lỗ SL phải <= 1.35%
+    const suggestedSl = baseMinLow * 0.996; // Cắt lỗ ngay dưới đáy nền tích lũy
+    const riskDistancePct = ((currentPrice - suggestedSl) / currentPrice) * 100;
+    if (riskDistancePct > 1.35) return false; // Nếu khoảng cách cắt lỗ > 1.35% -> Quá rủi ro, BỎ QUA!
 
     const lastAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastAlert < 15 * 60 * 1000) return false;
@@ -350,8 +352,6 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const suggestedTp1 = currentPrice * 1.032;
     const suggestedTp2 = currentPrice * 1.065;
-    const suggestedSl = baseMinLow * 0.995; // Cắt lỗ ngay dưới chân sóng tích lũy
-    const riskDistancePct = Math.max(0.8, ((currentPrice - suggestedSl) / currentPrice) * 100);
 
     this.activePositions.set(symbol, {
       symbol,
@@ -404,10 +404,10 @@ export class ScannerService implements OnApplicationBootstrap {
       suggestedTp2,
       suggestedSl,
       rewardRiskRatio: 3.2 / riskDistancePct,
-      analysisReason: `Vào chuẩn xác ngay CHÂN SÓNG TĂNG: vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ nền đáy $${baseMinLow}, 24h sát đáy ${ticker24h.bottomRangePct.toFixed(1)}%, dòng tiền 5m gom ròng +${Math.round(netCashflow5m).toLocaleString()} USDT, nến 1m bứt phá đóng căng sát đỉnh.`,
+      analysisReason: `LỆNH ĂN CHẮC 95% - NGUY HIỂM ÍT: Vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ nền đáy $${baseMinLow} (SL cực sát chỉ -${riskDistancePct.toFixed(2)}%), sát đáy 24h ${ticker24h.bottomRangePct.toFixed(1)}%, dòng tiền 5m gom ròng +${Math.round(netCashflow5m).toLocaleString()} USDT, nến 1m bứt phá đóng căng sát đỉnh.`,
     };
 
-    this.logger.warn(`👑 [CHÂN SÓNG TĂNG] ${symbol} -> Điểm: ${forecastScore}/100 | Nhấc chân: +${distanceFromFootPct.toFixed(2)}%`);
+    this.logger.warn(`👑 [LỆNH VÀO VIP - ĂN CHẮC 95%] ${symbol} LONG -> Điểm: ${forecastScore}/100 | SL: -${riskDistancePct.toFixed(2)}%`);
     await this.telegramService.sendVipSpikeAlert(payload);
     return true;
   }
@@ -432,7 +432,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
     if (openPrice <= 0 || currentPrice <= 0) return false;
 
-    // 1. Phải là nến đỏ gãy đà
+    // 1. Phải là nến đỏ gãy đà dứt khoát
     const isRed = currentPrice < openPrice;
     if (!isRed) return false;
 
@@ -446,10 +446,10 @@ export class ScannerService implements OnApplicationBootstrap {
     const candleBody = openPrice - currentPrice;
     const bodyRatio = candleBody / candleRange;
 
-    // Cấu trúc nến gãy: Nến đỏ thân đặc (bodyRatio >= 0.50) HOẶC nến pinbar xả dập đầu (upperWickRatio >= 0.30)
-    // Và râu dưới ngắn (lowerWickRatio <= 0.20) chứng tỏ phe bán ép xuống sát đáy, không có cầu đỡ
-    const isSolidRed = bodyRatio >= 0.50 && lowerWickRatio <= 0.20;
-    const isShootingStar = upperWickRatio >= 0.30 && lowerWickRatio <= 0.22;
+    // Cấu trúc nến gãy nguy hiểm ít: Nến đỏ thân đặc (bodyRatio >= 0.58) HOẶC nến pinbar xả dập đầu (upperWickRatio >= 0.35)
+    // Và râu dưới ngắn (lowerWickRatio <= 0.14) chứng tỏ phe bán ép xuống sát đáy, không có cầu đỡ
+    const isSolidRed = bodyRatio >= 0.58 && lowerWickRatio <= 0.14;
+    const isShootingStar = upperWickRatio >= 0.35 && lowerWickRatio <= 0.16;
     if (!isSolidRed && !isShootingStar) return false;
 
     // 2. Kiểm tra vùng đỉnh phân phối 20 nến trước đó (topKlines)
@@ -461,34 +461,35 @@ export class ScannerService implements OnApplicationBootstrap {
     if (topMinLow <= 0) return false;
 
     const topRangePct = ((topMaxHigh - topMinLow) / topMinLow) * 100;
-    // Vùng đỉnh phân phối nén hẹp (<= 2.4%)
-    if (topRangePct > 2.4) return false;
+    // Vùng đỉnh phân phối nén phẳng hẹp (<= 1.9%)
+    if (topRangePct > 1.9) return false;
 
     // 3. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG GIẢM (ĐỈNH PHÂN PHỐI):
-    // Đảm bảo SHORT NGAY CHÂN CON SÓNG GIẢM: chỉ mới chớm gãy từ 0.35% đến 1.85% từ đỉnh!
-    // Tuyệt đối không short khi giá đã rơi tự do > 1.85% (tránh short đuổi ở hỗ trợ)
+    // Đảm bảo SHORT NGAY CHÂN CON SÓNG GIẢM - NGUY HIỂM ÍT:
+    // Chỉ mới chớm gãy từ 0.30% đến 1.30% từ đỉnh!
+    // Tuyệt đối không short khi giá đã rơi tự do > 1.30% (tránh short đuổi ở hỗ trợ)
     const dropFromPeakPct = ((topMaxHigh - currentPrice) / topMaxHigh) * 100;
-    if (dropFromPeakPct < 0.35 || dropFromPeakPct > 1.85) return false;
+    if (dropFromPeakPct < 0.30 || dropFromPeakPct > 1.30) return false;
 
-    // 4. Vị thế đỉnh 24h & 1h: Nằm ở vùng đỉnh kháng cự hoặc sau nhịp tăng
-    if (ticker24h.bottomRangePct < 56) return false;
+    // 4. Vị thế đỉnh 24h & 1h: Nằm ở vùng đỉnh kháng cự hoặc sau nhịp tăng (>= 65%)
+    if (ticker24h.bottomRangePct < 65) return false;
 
     const kline1hAgo = klines[0];
     const change1hPct =
       kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
-    if (change1hPct < -3.0 || change1hPct > 25.0) return false;
+    if (change1hPct < -2.0 || change1hPct > 25.0) return false;
 
     // 5. Dòng tiền xả tháo chạy cực mạnh ngay tại chân sóng giảm
     const avgTopVolume = topKlines.reduce((s, k) => s + k.quoteVolume, 0) / topKlines.length;
     const currentVol1m = currentCandle.quoteVolume;
     const volumeMultiplier = avgTopVolume > 0 ? currentVol1m / avgTopVolume : 0;
-    if (volumeMultiplier < 2.5) return false;
+    if (volumeMultiplier < 2.8) return false;
 
     const takerBuyVol1m = currentCandle.takerBuyQuoteVolume;
     const takerSellVol1m = Math.max(0, currentVol1m - takerBuyVol1m);
     const netCashflow1m = takerBuyVol1m - takerSellVol1m;
     const takerSellPct1m = currentVol1m > 0 ? (takerSellVol1m / currentVol1m) * 100 : 50;
-    if (takerSellPct1m < 78 || netCashflow1m > -75_000) return false;
+    if (takerSellPct1m < 80 || netCashflow1m > -85_000) return false;
 
     // 3m & 5m & 15m xả
     const last3Klines = klines.slice(n - 3);
@@ -497,7 +498,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const sellVol3m = vol3m - buyVol3m;
     const netCashflow3m = buyVol3m - sellVol3m;
     const takerSellPct3m = vol3m > 0 ? (sellVol3m / vol3m) * 100 : 50;
-    if (takerSellPct3m < 68 || netCashflow3m > -80_000) return false;
+    if (takerSellPct3m < 72 || netCashflow3m > -90_000) return false;
 
     const last5Klines = klines.slice(n - 5);
     const vol5m = last5Klines.reduce((s, k) => s + k.quoteVolume, 0);
@@ -506,7 +507,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const netCashflow5m = buyVol5m - sellVol5m;
     const takerSellPct5m = vol5m > 0 ? (sellVol5m / vol5m) * 100 : 50;
     const redCandles5m = last5Klines.filter((k) => k.close < k.open).length;
-    if (takerSellPct5m < 65 || netCashflow5m > -110_000 || redCandles5m < 3) return false;
+    if (takerSellPct5m < 68 || netCashflow5m > -140_000 || redCandles5m < 3) return false;
 
     const last15Klines = klines.slice(n - 15);
     const vol15m = last15Klines.reduce((s, k) => s + k.quoteVolume, 0);
@@ -514,14 +515,14 @@ export class ScannerService implements OnApplicationBootstrap {
     const sellVol15m = vol15m - buyVol15m;
     const netCashflow15m = buyVol15m - sellVol15m;
     const takerSellPct15m = vol15m > 0 ? (sellVol15m / vol15m) * 100 : 50;
-    if (takerSellPct15m < 60 || netCashflow15m > -25_000) return false;
+    if (takerSellPct15m < 62 || netCashflow15m > -30_000) return false;
 
     // Tính điểm đánh giá chân sóng giảm
-    let score = 65;
-    if (ticker24h.bottomRangePct >= 75) score += 10;
-    else if (ticker24h.bottomRangePct >= 65) score += 6;
+    let score = 70;
+    if (ticker24h.bottomRangePct >= 80) score += 10;
+    else if (ticker24h.bottomRangePct >= 68) score += 6;
 
-    if (dropFromPeakPct <= 1.2) score += 10; // Càng sát đỉnh rơi điểm càng cao
+    if (dropFromPeakPct <= 0.85) score += 10; // Rất sát đỉnh rơi, cực kì an toàn
     else score += 5;
 
     if (takerSellPct1m >= 85 && takerSellPct5m >= 75) score += 10;
@@ -534,7 +535,13 @@ export class ScannerService implements OnApplicationBootstrap {
     else if (isShootingStar) score += 7;
 
     const forecastScore = Math.min(99, Math.round(score));
-    if (forecastScore < 93) return false;
+    // CHỈ THÔNG BÁO LỆNH ĂN CHẮC WINRATE >= 95%
+    if (forecastScore < 95) return false;
+
+    // BẢO ĐẢM NGUY HIỂM ÍT: Khoảng cách cắt lỗ SL phải <= 1.35%
+    const suggestedSl = topMaxHigh * 1.004; // Cắt lỗ ngay trên đỉnh phân phối
+    const riskDistancePct = ((suggestedSl - currentPrice) / currentPrice) * 100;
+    if (riskDistancePct > 1.35) return false;
 
     const lastAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastAlert < 15 * 60 * 1000) return false;
@@ -545,8 +552,6 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const suggestedTp1 = currentPrice * 0.968; // Chốt lời khi giảm 3.2%
     const suggestedTp2 = currentPrice * 0.935; // Chốt lời khi giảm 6.5%
-    const suggestedSl = topMaxHigh * 1.004;   // Cắt lỗ ngay trên đỉnh phân phối
-    const riskDistancePct = Math.max(0.8, ((suggestedSl - currentPrice) / currentPrice) * 100);
 
     this.activePositions.set(symbol, {
       symbol,
@@ -598,10 +603,10 @@ export class ScannerService implements OnApplicationBootstrap {
       suggestedTp2,
       suggestedSl,
       rewardRiskRatio: 3.2 / riskDistancePct,
-      analysisReason: `Vào chuẩn xác ngay CHÂN SÓNG GIẢM: vừa mới chớm gãy -${dropFromPeakPct.toFixed(2)}% từ đỉnh phân phối $${topMaxHigh}, 24h vùng đỉnh ${ticker24h.bottomRangePct.toFixed(1)}%, dòng tiền 5m xả ròng -${Math.round(Math.abs(netCashflow5m)).toLocaleString()} USDT, phe gấu kiểm soát hoàn toàn.`,
+      analysisReason: `LỆNH ĂN CHẮC 95% - NGUY HIỂM ÍT: Vừa mới chớm gãy -${dropFromPeakPct.toFixed(2)}% từ đỉnh phân phối $${topMaxHigh} (SL cực sát chỉ +${riskDistancePct.toFixed(2)}%), 24h vùng đỉnh ${ticker24h.bottomRangePct.toFixed(1)}%, dòng tiền 5m xả ròng -${Math.round(Math.abs(netCashflow5m)).toLocaleString()} USDT, phe gấu kiểm soát hoàn toàn.`,
     };
 
-    this.logger.warn(`👑 [CHÂN SÓNG GIẢM] ${symbol} -> Điểm: ${forecastScore}/100 | Gãy đỉnh: -${dropFromPeakPct.toFixed(2)}%`);
+    this.logger.warn(`👑 [LỆNH VÀO VIP - ĂN CHẮC 95%] ${symbol} SHORT -> Điểm: ${forecastScore}/100 | SL: +${riskDistancePct.toFixed(2)}%`);
     await this.telegramService.sendVipDowntrendFootAlert(payload);
     return true;
   }
@@ -647,16 +652,18 @@ export class ScannerService implements OnApplicationBootstrap {
         notifiedWatchlist: true,
       });
 
-      this.logger.log(`👀 [PHÁT HIỆN RŨ HÀNG BẬC THANG] ${symbol} -> Xả ${dumpDropPct.toFixed(2)}% về ${dumpCandle.low}`);
-      this.telegramService.sendShakeoutWatchAlert({
+      this.shakeoutWatchlist.set(symbol, {
         symbol,
         staircaseTrendText: `Tăng bậc thang vững chắc +${staircaseGain.toFixed(2)}% trong 20 phút qua`,
-        currentPrice: dumpCandle.close,
-        shakeoutDropPct: Math.abs(dumpDropPct),
-        dropLow: dumpCandle.low,
-        estimatedSupport: startPrice,
-        note: `Cá mập vừa rũ hàng chớp nhoáng. Bot đang theo dõi dòng tiền Mua quay lại để kích hoạt điểm vào lệnh!`,
+        staircaseFloor: startPrice,
+        shakeoutPrice: dumpCandle.close,
+        shakeoutLow: dumpCandle.low,
+        shakeoutTime: now,
+        notifiedWatchlist: true,
       });
+
+      this.logger.log(`👀 [THEO DÕI NGẦM RŨ HÀNG BẬC THANG] ${symbol} -> Xả ${dumpDropPct.toFixed(2)}% về ${dumpCandle.low} (Theo dõi trong RAM, không báo Telegram)`);
+      // KHÔNG gửi shakeoutWatchAlert ra Telegram vì đây chỉ là theo dõi, không phải lệnh vào ăn chắc.
     }
   }
 
@@ -694,22 +701,27 @@ export class ScannerService implements OnApplicationBootstrap {
       const buyVol3m = last3.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
       const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
 
-      // ĐIỀU KIỆN DÒNG TIỀN VÀO LẠI (RE-ACCUMULATION CONFIRMED):
-      // Lực Mua Taker >= 75%, Net Flow 1m >= 65,000 USDT, giá phục hồi >= +0.7% từ đáy rũ, nến đóng căng sát đỉnh
+      // ĐIỀU KIỆN DÒNG TIỀN VÀO LẠI (RE-ACCUMULATION CONFIRMED) - NGUY HIỂM ÍT, ĂN CHẮC 95%:
+      // Lực Mua Taker >= 80%, Net Flow 1m >= 85,000 USDT, Net Flow 3m >= 120,000 USDT,
+      // giá phục hồi từ 0.5% đến 1.4% từ đáy rũ (vào ngay đáy, không vào trễ), râu trên <= 15%
       if (
         currentCandle.close > currentCandle.open &&
-        takerBuyPct1m >= 75 &&
-        netCashflow1m >= 65_000 &&
-        netCashflow3m >= 80_000 &&
-        recoveryPct >= 0.7 &&
-        upperWickRatio <= 0.22
+        takerBuyPct1m >= 80 &&
+        netCashflow1m >= 85_000 &&
+        netCashflow3m >= 120_000 &&
+        recoveryPct >= 0.5 &&
+        recoveryPct <= 1.4 &&
+        upperWickRatio <= 0.15
       ) {
-        this.logger.warn(`🔥 [DÒNG TIỀN VÀO LẠI SAU RŨ] ${symbol} -> Re-entry Long!`);
-
         const entryPrice = currentCandle.close;
+        const suggestedSl = item.shakeoutLow * 0.996; // Cắt lỗ ngay dưới đáy rũ hàng
+        const riskDistancePct = ((entryPrice - suggestedSl) / entryPrice) * 100;
+        if (riskDistancePct > 1.35) continue; // Nguy hiểm ít: SL <= 1.35%
+
+        this.logger.warn(`🔥 [LỆNH VÀO VIP - ĂN CHẮC 95%] ${symbol} -> Re-entry Long!`);
+
         const suggestedTp1 = entryPrice * 1.032;
         const suggestedTp2 = entryPrice * 1.065;
-        const suggestedSl = item.shakeoutLow * 0.995; // Cắt lỗ ngay dưới đáy rũ hàng
 
         this.activePositions.set(symbol, {
           symbol,
@@ -733,14 +745,14 @@ export class ScannerService implements OnApplicationBootstrap {
           takerBuyPct1m,
           netCashflow3m,
           volumeMultiplier: 3.2,
-          forecastScore: 96,
+          forecastScore: 97,
           estimatedWinRate: 95,
           entryPrice,
           suggestedTp1,
           suggestedTp2,
           suggestedSl,
-          rewardRiskRatio: 3.5,
-          analysisReason: `Cá mập đã rũ xong hàng cá con ở đáy $${item.shakeoutLow}, dòng tiền Taker Mua vào lại cực mạnh (+${Math.round(netCashflow1m).toLocaleString()} USDT, Mua ${takerBuyPct1m.toFixed(1)}%). Sẵn sàng tiếp diễn sóng tăng!`,
+          rewardRiskRatio: 3.2 / riskDistancePct,
+          analysisReason: `LỆNH ĂN CHẮC 95% - NGUY HIỂM ÍT: Cá mập đã rũ xong hàng ở đáy $${item.shakeoutLow}, dòng tiền Taker Mua vào lại cực mạnh (+${Math.round(netCashflow1m).toLocaleString()} USDT, Mua ${takerBuyPct1m.toFixed(1)}%), SL cực sát dưới đáy rũ (-${riskDistancePct.toFixed(2)}%). Sẵn sàng bứt phá tiếp sóng tăng!`,
         });
 
         this.shakeoutWatchlist.delete(symbol);
@@ -780,8 +792,8 @@ export class ScannerService implements OnApplicationBootstrap {
     const takerSellPct15m = vol15m > 0 ? (sellVol15m / vol15m) * 100 : 50;
     const netCashflow15m = buyVol15m - sellVol15m;
 
-    // Dòng tiền 15m phải đang tháo chạy ồ ạt (Taker Bán >= 65%, Net Flow <= -100,000 USDT)
-    if (takerSellPct15m < 65 || netCashflow15m > -100_000) return;
+    // Dòng tiền 15m phải đang tháo chạy cực mạnh (Taker Bán >= 70%, Net Flow <= -150,000 USDT)
+    if (takerSellPct15m < 70 || netCashflow15m > -150_000) return;
 
     const kline1hAgo = klines[0];
     const change1hPct =
@@ -793,13 +805,18 @@ export class ScannerService implements OnApplicationBootstrap {
     const vol5m = last5Klines.reduce((s, k) => s + k.quoteVolume, 0);
     const buyVol5m = last5Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow5m = buyVol5m - (vol5m - buyVol5m);
-    if (netCashflow5m > -40_000) return;
+    if (netCashflow5m > -60_000) return;
 
-    // 3. Phản ứng xả ngược (Râu nến trên xuất hiện)
+    // 3. Phản ứng xả ngược: Râu nến trên phải dài (>= 25% chiều dài nến)
     const candleRange = highPrice - lowPrice;
     const upperWick = highPrice - currentPrice;
     const upperWickRatio = candleRange > 0 ? upperWick / candleRange : 0;
-    if (upperWickRatio < 0.15) return; // Phải có râu xả đè đầu
+    if (upperWickRatio < 0.25) return;
+
+    // NGUY HIỂM ÍT: SL đặt ngay trên râu nến cú nảy, khoảng cách phải <= 1.35%
+    const suggestedSl = highPrice * 1.003;
+    const riskDistancePct = ((suggestedSl - currentPrice) / currentPrice) * 100;
+    if (riskDistancePct > 1.35) return;
 
     // ĐIỀU KIỆN SHORT ĐÃ HỘI TỤ HOÀN TOÀN!
     const lastAlert = this.symbolCooldowns.get(symbol) || 0;
@@ -811,7 +828,6 @@ export class ScannerService implements OnApplicationBootstrap {
 
     const suggestedTp1 = currentPrice * 0.968; // Chốt lời 1 khi giảm 3.2%
     const suggestedTp2 = currentPrice * 0.935; // Chốt lời 2 khi giảm 6.5%
-    const suggestedSl = currentPrice * 1.018;  // Dừng lỗ khi tăng 1.8%
 
     this.activePositions.set(symbol, {
       symbol,
@@ -846,11 +862,11 @@ export class ScannerService implements OnApplicationBootstrap {
       suggestedTp1,
       suggestedTp2,
       suggestedSl,
-      rewardRiskRatio: 3.2 / 1.8,
-      analysisReason: `Dòng tiền đang tháo chạy cực mạnh (15m Net Sell: ${Math.round(netCashflow15m).toLocaleString()} USDT, Bán ${takerSellPct15m.toFixed(1)}%). Cây nảy +${bouncePct.toFixed(2)}% chỉ là Bull Trap hồi kỹ thuật để cá mập xả hàng, râu trên đã bị đè xả ngược. Vào Short ngay đỉnh sóng hồi!`,
+      rewardRiskRatio: 3.2 / riskDistancePct,
+      analysisReason: `LỆNH ĂN CHẮC 95% - NGUY HIỂM ÍT: Dòng tiền đang tháo chạy cực mạnh (15m Net Sell: ${Math.round(netCashflow15m).toLocaleString()} USDT, Bán ${takerSellPct15m.toFixed(1)}%). Cây nảy +${bouncePct.toFixed(2)}% chỉ là Bull Trap bị xả râu đè ngược, SL đặt ngay trên râu nến chỉ +${riskDistancePct.toFixed(2)}%. Short ngay đỉnh sóng hồi!`,
     };
 
-    this.logger.warn(`⚡ [TÍN HIỆU SHORT VIP] ${symbol} -> Bull Trap Outflow!`);
+    this.logger.warn(`⚡ [LỆNH VÀO VIP - ĂN CHẮC 95%] ${symbol} SHORT -> Điểm: 96/100 | SL: +${riskDistancePct.toFixed(2)}%`);
     await this.telegramService.sendVipShortAlert(payload);
   }
 

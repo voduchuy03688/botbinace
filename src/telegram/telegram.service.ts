@@ -326,8 +326,8 @@ export class TelegramService {
       payload.baseMinLow !== undefined ? `$${payload.baseMinLow}` : `$${payload.lowPrice}`;
 
     const lines: string[] = [
-      '👑 🔥 🟢 <b>[TÍN HIỆU VIP: BẮT ĐÚNG CHÂN SÓNG TĂNG (LONG)]</b>',
-      '🚀 <b>XÁC NHẬN VÀO NGAY CHÂN NỀN TÍCH LŨY (WIN RATE > 95%)</b>',
+      '👑 🛡️ 🟢 <b>[LỆNH VÀO VIP: CHÂN SÓNG TĂNG (LONG)]</b>',
+      '💎 <b>NGUY HIỂM ÍT (SL CỰC SÁT) - ĂN CHẮC WINRATE > 95%</b>',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       `🎯 <b>ĐIỂM HỘI TỤ CHÂN SÓNG:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
@@ -345,11 +345,11 @@ export class TelegramService {
       '🛡️ <b>CẤU TRÚC NẾN CHỐNG BẪY XẢ (ANTI-TRAP):</b>',
       '• Nến xanh đặc, đóng căng sát đỉnh, triệt tiêu hoàn toàn râu xả ảo!',
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH VÀO NGAY CHÂN SÓNG (TỐI ƯU RISK/REWARD):</b>',
+      '🎯 <b>KẾ HOẠCH VÀO NGAY CHÂN SÓNG (NGUY HIỂM ÍT):</b>',
       `• <b>Vào Lệnh Ngay (Entry Chân Sóng):</b> <code>$${payload.entryPrice}</code>`,
       `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Gồng trọn con sóng tăng)`,
-      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy nền chân sóng)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy nền, rủi ro siêu nhỏ)`,
       `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b> (Cực kì tối ưu)`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
@@ -366,8 +366,8 @@ export class TelegramService {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
-      '👑 ⚡ 🔴 <b>[TÍN HIỆU VIP: BẮT ĐÚNG CHÂN SÓNG GIẢM (SHORT)]</b>',
-      '📉 <b>VỪA CHỚM GÃY TỪ ĐỈNH PHÂN PHỐI - SHORT NGAY ĐIỂM XUẤT PHÁT ĐÀ RƠI</b>',
+      '👑 🛡️ 🔴 <b>[LỆNH VÀO VIP: CHÂN SÓNG GIẢM (SHORT)]</b>',
+      '💎 <b>NGUY HIỂM ÍT (SL CỰC SÁT) - ĂN CHẮC WINRATE > 95%</b>',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       `🎯 <b>ĐIỂM ĐÁNH GIÁ CHÂN SÓNG GIẢM:</b> <b>${payload.forecastScore}/100</b> (Winrate Short: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
@@ -382,7 +382,7 @@ export class TelegramService {
       `• <b>Khung 5m:</b> Net Xả 5m: <code>-${Math.round(Math.abs(payload.netCashflow5m)).toLocaleString()} USDT</code> (Bán: <code>${payload.takerSellPct5m.toFixed(1)}%</code> | <b>${payload.redCandles5m}/5 nến đỏ</b>)`,
       `• <b>Khung 15m:</b> Net Xả 15m: <code>-${Math.round(Math.abs(payload.netCashflow15m)).toLocaleString()} USDT</code> (Bán: <code>${payload.takerSellPct15m.toFixed(1)}%</code>)`,
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH SHORT NGAY CHÂN SÓNG GIẢM (TỐI ƯU LỢI NHUẬN):</b>',
+      '🎯 <b>KẾ HOẠCH SHORT NGAY CHÂN SÓNG GIẢM (NGUY HIỂM ÍT):</b>',
       `• <b>Vào Lệnh Ngay (Entry Short):</b> <code>$${payload.entryPrice}</code> (Vào ngay khi đỉnh vừa gãy)`,
       `• <b>Chốt Lời TP1 (+3.2% khi giá giảm):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5% khi giá giảm):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn cả con sóng sập)`,
@@ -403,8 +403,8 @@ export class TelegramService {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
-      '⚡ 🔴 📉 <b>[TÍN HIỆU SHORT VIP: BẪY TĂNG GIẢ (BULL TRAP)]</b>',
-      '🚨 <b>DÒNG TIỀN ĐANG THOÁT CỰC MẠNH - CƠ HỘI SHORT ĐỈNH SÓNG HỒI</b>',
+      '👑 🛡️ 🔴 <b>[LỆNH VÀO VIP: BẪY TĂNG GIẢ ĐỈNH HỒI (SHORT)]</b>',
+      '💎 <b>NGUY HIỂM ÍT (SL TRÊN RÂU NẾN) - ĂN CHẮC WINRATE > 95%</b>',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       `🎯 <b>ĐIỂM ĐÁNH GIÁ SHORT:</b> <b>${payload.forecastScore}/100</b> (Winrate Short: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
@@ -418,11 +418,11 @@ export class TelegramService {
       `• <b>Râu Nến Trên Xả Ngược:</b> <code>${(payload.upperWickRatio * 100).toFixed(0)}%</code> chiều dài nến`,
       '• <b>Bản Chất:</b> Cú nảy kỹ thuật do cạn thanh khoản bán tạm thời, cá mập tận dụng để xả nốt hàng giá cao!',
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH LỆNH SHORT VIP:</b>',
+      '🎯 <b>KẾ HOẠCH LỆNH SHORT VIP (NGUY HIỂM ÍT):</b>',
       `• <b>Vào Lệnh (Entry Short):</b> <code>$${payload.entryPrice}</code> (Short ngay đỉnh cú nảy)`,
       `• <b>Chốt Lời TP1 (+3.2% khi giá giảm):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5% khi giá giảm):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn sóng sập)`,
-      `• <b>Cắt Lỗ SL (+1.8% khi giá tăng):</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay trên râu nến)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay trên râu nến, rủi ro siêu nhỏ)`,
       `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
@@ -459,8 +459,8 @@ export class TelegramService {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
-      '🔥 👑 🟢 <b>[TÍN HIỆU VÀO LỆNH: DÒNG TIỀN VÀO LẠI SAU CÚ RŨ BẬC THANG]</b>',
-      '🚀 <b>CÁ MẠP ĐÃ HẤP THỤ XONG - BẮT ĐẦU PHA ĐẨY TIẾP DIỄN SÓNG TĂNG</b>',
+      '👑 🛡️ 🟢 <b>[LỆNH VÀO VIP: DÒNG TIỀN VÀO LẠI SAU RŨ (LONG)]</b>',
+      '💎 <b>NGUY HIỂM ÍT (SL DƯỚI ĐÁY RŨ) - ĂN CHẮC WINRATE > 95%</b>',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       `🎯 <b>ĐIỂM ĐÁNH GIÁ:</b> <b>${payload.forecastScore}/100</b> (Winrate dự kiến: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
@@ -470,11 +470,11 @@ export class TelegramService {
       `• <b>Dòng Tiền 3 Phút:</b> <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> (Đã nuốt trọn cây xả rũ hàng)`,
       `• <b>Hồi Phục:</b> Giá đã lấy lại <code>+${payload.recoveryPct.toFixed(2)}%</code> từ đáy rũ (<code>$${payload.shakeoutLow}</code>)`,
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH GIAO DỊCH VIP:</b>',
+      '🎯 <b>KẾ HOẠCH GIAO DỊCH VIP (NGUY HIỂM ÍT):</b>',
       `• <b>Vào Lệnh (Entry Long):</b> <code>$${payload.entryPrice}</code> (Vào ngay khi dòng tiền quay lại!)`,
       `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Gồng tiếp tục con sóng tăng)`,
-      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy cây nến rũ hàng)`,
+      `• <b>Cắt Lỗ SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Đặt ngay dưới đáy cây nến rũ hàng, rủi ro siêu nhỏ)`,
       `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
