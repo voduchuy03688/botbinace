@@ -15,6 +15,16 @@ export interface KlineData {
   takerBuyQuoteVolume: number;
 }
 
+export interface Ticker24hData {
+  symbol: string;
+  lastPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  priceChangePercent: number;
+  quoteVolume: number;
+  bottomRangePct: number; // ((lastPrice - lowPrice) / (highPrice - lowPrice)) * 100
+}
+
 @Injectable()
 export class BinanceService {
   private readonly logger = new Logger(BinanceService.name);
@@ -26,28 +36,84 @@ export class BinanceService {
     Accept: 'application/json',
   };
 
-  // MIN_VOLUME_24H: Chi lay cac coin co klgd Futures 24h >= 1,000,000 USDT
-  private readonly MIN_VOLUME_24H_USDT = 1_000_000;
+  // Lọc các coin Futures có thanh khoản 24h >= 3,000,000 USDT (loại bỏ coin rác kém thanh khoản, tránh bẫy giật ảo)
+  private readonly MIN_VOLUME_24H_USDT = 3_000_000;
 
-  async getActiveSymbolsByVolume(): Promise<string[]> {
+  private ticker24hMap: Map<string, Ticker24hData> = new Map();
+
+  async refreshTickers24h(): Promise<Map<string, Ticker24hData>> {
     try {
       const url = `${this.fapiBase}/fapi/v1/ticker/24hr`;
       const res = await axios.get(url, { headers: this.httpHeaders, timeout: 8000 });
-      const symbols = (res.data || [])
-        .filter((s: any) =>
-          s.symbol.endsWith('USDT') &&
-          parseFloat(s.quoteVolume) >= this.MIN_VOLUME_24H_USDT,
-        )
-        .map((s: any) => s.symbol);
+      const rawList = res.data || [];
+
+      this.ticker24hMap.clear();
+
+      for (const item of rawList) {
+        if (!item.symbol || !item.symbol.endsWith('USDT')) continue;
+
+        const quoteVol = parseFloat(item.quoteVolume || '0');
+        if (quoteVol < this.MIN_VOLUME_24H_USDT) continue;
+
+        const lastPrice = parseFloat(item.lastPrice || '0');
+        const highPrice = parseFloat(item.highPrice || '0');
+        const lowPrice = parseFloat(item.lowPrice || '0');
+        const priceChangePercent = parseFloat(item.priceChangePercent || '0');
+
+        if (lastPrice <= 0 || highPrice <= 0 || lowPrice <= 0) continue;
+
+        const range = highPrice - lowPrice;
+        const bottomRangePct = range > 0 ? Math.max(0, Math.min(100, ((lastPrice - lowPrice) / range) * 100)) : 50;
+
+        this.ticker24hMap.set(item.symbol, {
+          symbol: item.symbol,
+          lastPrice,
+          highPrice,
+          lowPrice,
+          priceChangePercent,
+          quoteVolume: quoteVol,
+          bottomRangePct,
+        });
+      }
 
       this.logger.log(
-        `Loc duoc ${symbols.length} coin Futures co KLGD 24h >= ${this.MIN_VOLUME_24H_USDT.toLocaleString()} USDT (1 request duy nhat)`,
+        `Cap nhat 24h Ticker: ${this.ticker24hMap.size} coin Futures thanh khoan >= ${this.MIN_VOLUME_24H_USDT.toLocaleString()} USDT`,
       );
-      return symbols;
+      return this.ticker24hMap;
     } catch (err: any) {
-      this.logger.error(`Loi khi lay ticker 24h: ${err.message}`);
-      return [];
+      this.logger.error(`Loi khi cap nhat 24h Ticker: ${err.message}`);
+      return this.ticker24hMap;
     }
+  }
+
+  getTicker24h(symbol: string): Ticker24hData | undefined {
+    return this.ticker24hMap.get(symbol);
+  }
+
+  getAllTickers24h(): Ticker24hData[] {
+    return Array.from(this.ticker24hMap.values());
+  }
+
+  // Lọc nhanh các token đang nằm trong VÙNG ĐÁY TÍCH LŨY (Bottom Zone)
+  getBottomZoneCandidates(
+    maxBottomPct = 38,
+    max24hChange = 5.0,
+    min24hChange = -18.0,
+  ): Ticker24hData[] {
+    return Array.from(this.ticker24hMap.values()).filter((t) => {
+      return (
+        t.bottomRangePct <= maxBottomPct &&
+        t.priceChangePercent <= max24hChange &&
+        t.priceChangePercent >= min24hChange
+      );
+    });
+  }
+
+  async getActiveSymbolsByVolume(): Promise<string[]> {
+    if (this.ticker24hMap.size === 0) {
+      await this.refreshTickers24h();
+    }
+    return Array.from(this.ticker24hMap.keys());
   }
 
   async getUsdtFuturesSymbols(): Promise<string[]> {
@@ -88,8 +154,9 @@ export class BinanceService {
         takerBuyBaseVolume: parseFloat(k[9]),
         takerBuyQuoteVolume: parseFloat(k[10]),
       }));
-    } catch (err: any) {
+    } catch {
       return [];
     }
   }
 }
+
