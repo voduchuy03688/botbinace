@@ -12,6 +12,10 @@ export interface VipSpikeAlertPayload {
   distanceFromFootPct?: number;
   baseMinLow?: number;
 
+  // Biến động giây (5s - 10s) & Dòng tiền tức thì
+  secondVelocityPct?: number;
+  secondVolInflow?: number;
+
   // HỘI TỤ ĐỒNG THUẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ
   // 1. Chân Sóng 24h
   bottomRangePct: number;
@@ -180,36 +184,45 @@ export class TelegramService {
         : '1.20';
 
     const lines: string[] = [
-      '🔥 👑 💎 <b>[THÔNG BÁO CỰC KÌ NGON: BẮT ĐÚNG CHÂN SÓNG ĐA KHUNG GIỜ]</b>',
-      '🛡️ <b>ĐỒNG THUẬN TẤT CẢ CÁC CHÂN: 1M - 5M - 15M - 1H - 24H</b>',
-      '🌟 <b>VÙNG ĐÁY BẮT ĐẦU ĐI LÊN - RỦI RO THẤP - ĂN NHIỀU - WINRATE > 95%</b>',
+      '🚀 ⚡ 💎 <b>[CẢNH BÁO DÒNG TIỀN VÀO MẠNH: CHUẨN BỊ BAY]</b>',
+      '🔥 <b>PHÁT HIỆN BIẾN ĐỘNG GIÂY & PHÚT - DÒNG TIỀN CÁ MẬP VÀO HÀNG!</b>',
+      '🌟 <b>VÙNG CHÂN SÓNG BỨT PHÁ - VÀO LỆNH NGAY KẺO LỠ!</b>',
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐIỂM CHÂN SÓNG TỔNG HỢP:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
+      `🎯 <b>ĐỘ MẠNH DÒNG TIỀN & XUNG LỰC:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
-      '👣 <b>XÁC NHẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ (MULTI-TIMEFRAME):</b>',
-      `• <b>Chân Sóng 24h:</b> Sát đáy <b>${payload.bottomRangePct.toFixed(1)}%</b> của cả ngày (Đáy 24h: <code>$${payload.low24h}</code> | Đỉnh 24h: <code>$${payload.high24h}</code>)`,
-      `• <b>Chân Sóng 1h:</b> ${payload.status1hText} (Nằm ở <b>${payload.foot1hPct.toFixed(1)}%</b> đáy khung 1h | 1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
-      `• <b>Chân Sóng 15m:</b> ${payload.status15mText} (Cách đáy 15m: <code>+${payload.distanceFromFoot15mPct.toFixed(2)}%</code> | Đáy 15m: <code>$${payload.baseLow15m}</code>)`,
-      `• <b>Chân Sóng 5m:</b> Nâng đáy đi lên (Net gom 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> | <b>${payload.greenCandles5m}/5 nến xanh</b>)`,
-      `• <b>Chân Sóng 1m (Điểm Kích Nổ):</b> Vừa nhấc chân <code>${footDistanceText}</code> khỏi nền đáy 1m (<code>${baseLowText}</code>)`,
+      '⚡ <b>BIẾN ĐỘNG TỨC THÌ (GIÂY & PHÚT):</b>',
+      ...(payload.secondVelocityPct !== undefined && payload.secondVelocityPct > 0
+        ? [
+            `• <b>Biến Động Tức Thì (5 Giây):</b> <b>+${payload.secondVelocityPct.toFixed(2)}%</b> 🚀 (Giật giá kích nổ sóng)${
+              payload.secondVolInflow ? ` | Bơm ròng: <code>+${Math.round(payload.secondVolInflow).toLocaleString()} USDT</code>` : ''
+            }`,
+          ]
+        : []),
+      `• <b>Biến Động 1 Phút (1m):</b> <b>+${payload.priceChangePct.toFixed(2)}%</b> (Bứt phá dứt khoát)`,
+      `• <b>Biến Động 5 Phút (5m):</b> <b>${payload.priceChange5mPct >= 0 ? '+' : ''}${payload.priceChange5mPct.toFixed(2)}%</b> (${payload.greenCandles5m}/5 nến xanh)`,
       '----------------------------------------',
-      '🌊 <b>DÒNG TIỀN VÀO CỰC KỲ MẠNH (CÁ MẬP VÀO HÀNG):</b>',
-      `• <b>Khối Lượng 1m:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
-      `• <b>Lực Mua Chủ Động 1m:</b> Taker Mua <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net gom 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
-      `• <b>Dòng Tiền Đa Khung:</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code> | Net 15m: <code>+${Math.round(payload.netCashflow15m).toLocaleString()} USDT</code>`,
+      '🌊 <b>DÒNG TIỀN MUA GOM CỰC MẠNH (CÁ MẬP BƠM TIỀN):</b>',
+      `• <b>Khối Lượng 1 Phút:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
+      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net gom 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
+      `• <b>Dòng Tiền Đa Khung (Net Gom):</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code>`,
       '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH VÀO LỆNH (RỦI RO CỰC THẤP - ĂN NHIỀU):</b>',
-      `• <b>Vào Lệnh Ngay (Entry Chân Sóng):</b> <code>$${payload.entryPrice}</code>`,
+      '🌱 <b>VỊ THẾ CHÂN SÓNG (CHUẨN BỊ BAY - RỦI RO CỰC THẤP):</b>',
+      `• <b>Vị Trí Chân Sóng:</b> Vừa nhấc chân <code>${footDistanceText}</code> khỏi nền đáy (Đáy gom: <code>${baseLowText}</code>)`,
+      `• <b>Khung 15m:</b> ${payload.status15mText} (Cách đáy 15m: <code>+${payload.distanceFromFoot15mPct.toFixed(2)}%</code>)`,
+      `• <b>Khung 1h:</b> ${payload.status1hText} (1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
+      '----------------------------------------',
+      '🎯 <b>KẾ HOẠCH VÀO LỆNH (CHUẨN BỊ BAY):</b>',
+      `• <b>Vào Lệnh Ngay (Entry):</b> <code>$${payload.entryPrice}</code>`,
       `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
       `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn con sóng lớn)`,
-      `• <b>Cắt Lỗ SL Cực Sát:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Rủi ro chỉ <b>-${riskDistance}%</b>, ngay dưới đáy nền)`,
-      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b> (Mất cực ít - Ăn cực nhiều)`,
+      `• <b>Cắt Lỗ SL Sát Nền:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Rủi ro chỉ <b>-${riskDistance}%</b>, ngay dưới đáy nền)`,
+      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
       '----------------------------------------',
       `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
       '----------------------------------------',
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Mở Vị Thế LONG Trên Binance Futures</a>`,
+      `🔗 <a href="${binanceUrl}">Mở Vị Thế LONG Trên Binance Futures Ngay</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));

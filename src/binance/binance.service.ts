@@ -25,6 +25,13 @@ export interface Ticker24hData {
   bottomRangePct: number; // ((lastPrice - lowPrice) / (highPrice - lowPrice)) * 100
 }
 
+export interface TickerVelocityData {
+  symbol: string;
+  velocityPct: number; // % biến động giá trong 5 giây gần nhất
+  volInflow: number;   // Dòng tiền USDT bơm vào trong 5 giây gần nhất
+  timestamp: number;
+}
+
 @Injectable()
 export class BinanceService {
   private readonly logger = new Logger(BinanceService.name);
@@ -40,8 +47,8 @@ export class BinanceService {
   private readonly MIN_VOLUME_24H_USDT = 1_500_000;
 
   private ticker24hMap: Map<string, Ticker24hData> = new Map();
-  private previousPriceMap: Map<string, { price: number; timestamp: number }> = new Map();
-  private velocityMap: Map<string, number> = new Map();
+  private previousPriceMap: Map<string, { price: number; quoteVol: number; timestamp: number }> = new Map();
+  private velocityMap: Map<string, TickerVelocityData> = new Map();
 
   async refreshTickers24h(): Promise<Map<string, Ticker24hData>> {
     try {
@@ -68,13 +75,19 @@ export class BinanceService {
         const range = highPrice - lowPrice;
         const bottomRangePct = range > 0 ? Math.max(0, Math.min(100, ((lastPrice - lowPrice) / range) * 100)) : 50;
 
-        // Tính toán tốc độ biến động giá tức thì giữa 2 lần quét (Price Velocity)
+        // Tính toán tốc độ biến động giá & dòng tiền tức thì giữa các chu kỳ quét (5 giây)
         const prev = this.previousPriceMap.get(item.symbol);
         if (prev && prev.price > 0) {
           const velocity = ((lastPrice - prev.price) / prev.price) * 100;
-          this.velocityMap.set(item.symbol, velocity);
+          const volInflow = Math.max(0, quoteVol - prev.quoteVol);
+          this.velocityMap.set(item.symbol, {
+            symbol: item.symbol,
+            velocityPct: velocity,
+            volInflow,
+            timestamp: now,
+          });
         }
-        this.previousPriceMap.set(item.symbol, { price: lastPrice, timestamp: now });
+        this.previousPriceMap.set(item.symbol, { price: lastPrice, quoteVol, timestamp: now });
 
         this.ticker24hMap.set(item.symbol, {
           symbol: item.symbol,
@@ -87,9 +100,6 @@ export class BinanceService {
         });
       }
 
-      this.logger.log(
-        `Cap nhat 24h Ticker: ${this.ticker24hMap.size} coin Futures thanh khoan >= ${this.MIN_VOLUME_24H_USDT.toLocaleString()} USDT`,
-      );
       return this.ticker24hMap;
     } catch (err: any) {
       this.logger.error(`Loi khi cap nhat 24h Ticker: ${err.message}`);
@@ -105,15 +115,22 @@ export class BinanceService {
     return Array.from(this.ticker24hMap.values());
   }
 
-  // Danh sách coin có tốc độ giá tăng vọt tức thì (Realtime Price Velocity)
-  getHotVelocitySymbols(minVelocityPct = 0.35): string[] {
-    const hotList: { symbol: string; velocity: number }[] = [];
-    for (const [symbol, vel] of this.velocityMap.entries()) {
-      if (vel >= minVelocityPct && this.ticker24hMap.has(symbol)) {
-        hotList.push({ symbol, velocity: vel });
+  // Danh sách coin có tốc độ giá tăng vọt & dòng tiền đổ vào tức thì (Realtime 5s Price & Cashflow Velocity)
+  getHotVelocitySymbols(minVelocityPct = 0.20, minInflow = 5_000): string[] {
+    const hotList: { symbol: string; score: number }[] = [];
+    for (const [symbol, data] of this.velocityMap.entries()) {
+      if (
+        (data.velocityPct >= minVelocityPct || (data.velocityPct >= 0.15 && data.volInflow >= minInflow)) &&
+        this.ticker24hMap.has(symbol)
+      ) {
+        hotList.push({ symbol, score: data.velocityPct * 10 + data.volInflow / 10_000 });
       }
     }
-    return hotList.sort((a, b) => b.velocity - a.velocity).map((item) => item.symbol);
+    return hotList.sort((a, b) => b.score - a.score).map((item) => item.symbol);
+  }
+
+  getVelocityData(symbol: string): TickerVelocityData | undefined {
+    return this.velocityMap.get(symbol);
   }
 
   // Lấy toàn bộ danh sách coin hợp lệ cho quét sóng tăng (Loại trừ coin sập quá sâu hoặc đã bay quá xa đu đỉnh)

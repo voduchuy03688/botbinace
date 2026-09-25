@@ -1,6 +1,11 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { BinanceService, KlineData, Ticker24hData } from '../binance/binance.service.js';
+import {
+  BinanceService,
+  KlineData,
+  Ticker24hData,
+  TickerVelocityData,
+} from '../binance/binance.service.js';
 import {
   TelegramService,
   VipSpikeAlertPayload,
@@ -48,16 +53,16 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // QUÉT REALTIME ĐA KHUNG THỜI GIAN (20 GIÂY/LẦN)
-  // Quét toàn bộ thị trường, ưu tiên coin giật giá tức thì + top tăng/volume + quét xoay vòng
+  // QUÉT REALTIME TỐC ĐỘ CAO (5 GIÂY/LẦN)
+  // Bắt tức thì biến động 1s/5s và phút khi dòng tiền cá mập vừa bơm vào
   // =========================================================================
-  @Cron('*/20 * * * * *')
+  @Cron('*/5 * * * * *')
   async handleRealtimeScan() {
     if (this.isScanning) return;
 
     this.isScanning = true;
     try {
-      // 1. Cập nhật dữ liệu Ticker 24h & Price Velocity tức thì
+      // 1. Cập nhật dữ liệu Ticker 24h & Price/Cashflow Velocity tức thì (mỗi 5 giây)
       await this.binanceService.refreshTickers24h();
 
       // 2. Quản lý và theo dõi các vị thế đang chạy (TP1 +3.2%, TP2 +6.5%, hoặc SL an toàn)
@@ -70,23 +75,23 @@ export class ScannerService implements OnApplicationBootstrap {
       const now = Date.now();
       const isAvailable = (sym: string) => {
         const lastAlert = this.symbolCooldowns.get(sym) || 0;
-        return now - lastAlert > 15 * 60 * 1000; // Cooldown 15 phút mỗi coin
+        return now - lastAlert > 10 * 60 * 1000; // Cooldown 10 phút mỗi coin
       };
 
-      // ƯU TIÊN 1: Các coin đang có tốc độ giật giá tăng vọt tức thì (Realtime Velocity >= 0.30%)
-      const velocityHotSymbols = this.binanceService.getHotVelocitySymbols(0.30).filter(isAvailable);
+      // ƯU TIÊN 1: Các coin đang có tốc độ giật giá & dòng tiền bơm vào tức thì (5s Velocity >= 0.20% hoặc inflow mạnh)
+      const velocityHotSymbols = this.binanceService.getHotVelocitySymbols(0.20, 5000).filter(isAvailable);
 
       // ƯU TIÊN 2: Top tăng giá mạnh nhất ngày (Gainers)
       const topGainers = [...eligibleTickers]
         .sort((a, b) => b.priceChangePercent - a.priceChangePercent)
-        .slice(0, 25)
+        .slice(0, 15)
         .map((t) => t.symbol)
         .filter(isAvailable);
 
       // ƯU TIÊN 3: Top thanh khoản lớn nhất ngày (Volume)
       const topVolume = [...eligibleTickers]
         .sort((a, b) => b.quoteVolume - a.quoteVolume)
-        .slice(0, 25)
+        .slice(0, 15)
         .map((t) => t.symbol)
         .filter(isAvailable);
 
@@ -99,7 +104,7 @@ export class ScannerService implements OnApplicationBootstrap {
           !topVolume.includes(t.symbol),
       );
 
-      const sweepBatchSize = 25;
+      const sweepBatchSize = 15;
       const sweepSymbols = remainingTickers
         .slice(this.sweepIndex, this.sweepIndex + sweepBatchSize)
         .map((t) => t.symbol);
@@ -108,7 +113,7 @@ export class ScannerService implements OnApplicationBootstrap {
           ? (this.sweepIndex + sweepBatchSize) % remainingTickers.length
           : 0;
 
-      // Gom thành danh sách quét duy nhất (khoảng 40-60 coin mỗi chu kỳ)
+      // Gom thành danh sách quét duy nhất (khoảng 25-45 coin mỗi 5 giây)
       const targetPool = Array.from(
         new Set([...velocityHotSymbols, ...topGainers, ...topVolume, ...sweepSymbols]),
       );
@@ -126,7 +131,7 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // PHÂN TÍCH TOKEN: PHÁT HIỆN THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY BREAKOUT)
+  // PHÂN TÍCH TOKEN: PHÁT HIỆN DÒNG TIỀN VÀO MẠNH, BIẾN ĐỘNG GIÂY/PHÚT - CHUẨN BỊ BAY
   // =========================================================================
   private async analyzeSymbol(symbol: string) {
     const klines = await this.binanceService.getKlines(symbol, '1m', 35);
@@ -135,20 +140,22 @@ export class ScannerService implements OnApplicationBootstrap {
     const ticker24h = this.binanceService.getTicker24h(symbol);
     if (!ticker24h) return;
 
+    const velocityData = this.binanceService.getVelocityData(symbol);
     const now = Date.now();
 
-    // BẮT ĐÚNG THỜI ĐIỂM MỚI BẮT ĐẦU SÓNG TĂNG (LONG - CHÂN SÓNG - RỦI RO THẤP ĂN NHIỀU)
-    await this.detectFootOfUptrend(symbol, klines, ticker24h, now);
+    // BẮT ĐÚNG THỜI ĐIỂM DÒNG TIỀN VÀO MẠNH, BIẾN ĐỘNG GIÂY & PHÚT - CHUẨN BỊ BAY
+    await this.detectFootOfUptrend(symbol, klines, ticker24h, velocityData, now);
   }
 
   // =========================================================================
-  // THUẬT TOÁN: BẮT ĐÚNG THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY BREAKOUT)
-  // Tiêu chuẩn: Vừa nhấc chân khỏi nền + Dòng tiền gom bứt phá + Đa khung giờ đồng thuận
+  // THUẬT TOÁN: BẮT ĐÚNG THỜI ĐIỂM DÒNG TIỀN VÀO MẠNH - CHUẨN BỊ BAY
+  // Tiêu chuẩn: Biến động 5s/1m nhảy vọt + Dòng tiền gom bứt phá + Vị thế chân sóng
   // =========================================================================
   private async detectFootOfUptrend(
     symbol: string,
     klines: KlineData[],
     ticker24h: Ticker24hData,
+    velocityData: TickerVelocityData | undefined,
     now: number,
   ): Promise<boolean> {
     const n = klines.length;
@@ -175,30 +182,31 @@ export class ScannerService implements OnApplicationBootstrap {
     if (baseMinLow <= 0) return false;
 
     const baseRangePct = ((baseMaxHigh - baseMinLow) / baseMinLow) * 100;
-    // Nền tích lũy không quá hỗn loạn (biên độ dao động nền <= 5.5%)
-    if (baseRangePct > 5.5) return false;
+    // Nền tích lũy không quá hỗn loạn (biên độ dao động nền <= 5.8%)
+    if (baseRangePct > 5.8) return false;
 
     // 2. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG (ĐÁY NỀN):
-    // Đảm bảo BẮT ĐÚNG KHI MỚI BẮT ĐẦU SÓNG (vừa nhấc chân từ 0.40% đến 4.50% tính từ đáy nền gom hàng)
+    // Đảm bảo BẮT ĐÚNG KHI MỚI BẮT ĐẦU SÓNG (vừa nhấc chân từ 0.30% đến 4.80% tính từ đáy nền gom hàng)
     const distanceFromFootPct = ((currentPrice - baseMinLow) / baseMinLow) * 100;
-    if (distanceFromFootPct < 0.40 || distanceFromFootPct > 4.50) return false;
+    if (distanceFromFootPct < 0.30 || distanceFromFootPct > 4.80) return false;
 
     // 3. SÓNG MỚI TĂNG: Giá phải vượt hoặc chạm sát đỉnh nền đi ngang (bứt phá hộp tích lũy)
-    if (currentPrice < baseMaxHigh * 0.993) return false;
+    if (currentPrice < baseMaxHigh * 0.992) return false;
 
-    // 4. KIỂM TRA NẾN BỨT PHÁ (MOMENTUM TRIGGER 1M HOẶC 3M)
+    // 4. KIỂM TRA BIẾN ĐỘNG GIÂY (5S) & PHÚT (1M - 3M)
     const priceChange1mPct = ((currentPrice - openPrice) / openPrice) * 100;
     const price3mAgo = klines[n - 4]?.close || openPrice;
     const priceChange3mPct = price3mAgo > 0 ? ((currentPrice - price3mAgo) / price3mAgo) * 100 : 0;
 
-    // Phải có lực đẩy bứt phá: Nến 1m xanh (+0.40% đến +4.5%) HOẶC 3m tăng liên tiếp (+0.90% đến +6.0%)
-    const isBreakout =
-      (currentPrice > openPrice && priceChange1mPct >= 0.40 && priceChange1mPct <= 4.5) ||
-      (priceChange3mPct >= 0.90 && priceChange3mPct <= 6.0);
-    if (!isBreakout) return false;
+    // Kích nổ sóng: Biến động giây (5s >= 0.20%) HOẶC Nến 1m xanh (+0.35% đến +4.8%) HOẶC 3m tăng liên tiếp (+0.80% đến +6.0%)
+    const hasSecondSpike = !!(velocityData && (velocityData.velocityPct >= 0.20 || velocityData.volInflow >= 6_000));
+    const has1mSpike = currentPrice > openPrice && priceChange1mPct >= 0.35 && priceChange1mPct <= 4.8;
+    const has3mSpike = priceChange3mPct >= 0.80 && priceChange3mPct <= 6.0;
 
-    // Nến không bị xả đè đầu quá nặng (râu trên <= 38% chiều dài nến)
-    if (candleRange > 0 && upperWickRatio > 0.38) return false;
+    if (!hasSecondSpike && !has1mSpike && !has3mSpike) return false;
+
+    // Nến không bị xả đè đầu quá nặng (râu trên <= 40% chiều dài nến)
+    if (candleRange > 0 && upperWickRatio > 0.40) return false;
 
     // 5. YÊU CẦU: VOLUME & DÒNG TIỀN VÀO MẠNH (Cá mập kích hoạt sóng)
     const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
@@ -211,11 +219,16 @@ export class ScannerService implements OnApplicationBootstrap {
     const avg3mVol = vol3m / 3;
     const volumeMultiplier3m = avgBaseVolume > 0 ? avg3mVol / avgBaseVolume : 0;
 
-    // Khối lượng phải có sự đột biến so với nền (gấp >= 1.8x ở 1m hoặc >= 1.5x ở 3m, hoặc vol 1m đạt khủng >= 150k USDT)
-    if (volumeMultiplier < 1.8 && volumeMultiplier3m < 1.5 && currentVol1m < 150_000) return false;
+    // Khối lượng đột biến so với nền (gấp >= 1.6x ở 1m, hoặc >= 1.4x ở 3m, hoặc vol 1m >= 100k USDT, hoặc 5s inflow >= 8k USDT)
+    const isVolumeSpike =
+      volumeMultiplier >= 1.6 ||
+      volumeMultiplier3m >= 1.4 ||
+      currentVol1m >= 100_000 ||
+      (velocityData && velocityData.volInflow >= 8_000);
+    if (!isVolumeSpike) return false;
 
-    // Khối lượng tối thiểu 1m >= 35,000 USDT (đảm bảo thanh khoản thật, tránh giật ảo)
-    if (currentVol1m < 35_000) return false;
+    // Khối lượng tối thiểu 1m >= 25,000 USDT (đảm bảo thanh khoản thật, tránh giật ảo)
+    if (currentVol1m < 25_000 && (!velocityData || velocityData.volInflow < 6_000)) return false;
 
     const takerBuyVol1m = currentCandle.takerBuyQuoteVolume;
     const takerSellVol1m = Math.max(0, currentVol1m - takerBuyVol1m);
@@ -225,8 +238,8 @@ export class ScannerService implements OnApplicationBootstrap {
     const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
     const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
 
-    // Phe mua phải chiếm ưu thế (Taker Buy >= 53% ở 1m hoặc 3m, Net Cashflow dương)
-    if (takerBuyPct1m < 53 && takerBuyPct3m < 53) return false;
+    // Phe mua phải chiếm ưu thế (Taker Buy >= 52% ở 1m hoặc 3m, Net Cashflow dương)
+    if (takerBuyPct1m < 52 && takerBuyPct3m < 52) return false;
     if (netCashflow1m < 0 && netCashflow3m < 0) return false;
 
     // Dòng tiền 5m
@@ -258,8 +271,8 @@ export class ScannerService implements OnApplicationBootstrap {
     const foot15mPct = range15m > 0 ? ((currentPrice - baseLow15m) / range15m) * 100 : 50;
     const distanceFromFoot15mPct = baseLow15m > 0 ? ((currentPrice - baseLow15m) / baseLow15m) * 100 : 0;
 
-    // Khung 15m: Cách đáy 15m <= 6.8% (đang ở đầu sóng 15m, không fomo đỉnh nến 15m)
-    if (distanceFromFoot15mPct > 6.8) {
+    // Khung 15m: Cách đáy 15m <= 7.0% (đang ở đầu sóng 15m, không fomo đỉnh nến 15m)
+    if (distanceFromFoot15mPct > 7.0) {
       return false;
     }
 
@@ -283,28 +296,30 @@ export class ScannerService implements OnApplicationBootstrap {
     const kline1hAgo = klines1h[klines1h.length - 2] || klines1h[0];
     const change1hPct =
       kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
-    if (change1hPct < -12.0) {
+    if (change1hPct < -14.0) {
       return false;
     }
 
-    // Tính điểm đánh giá (Score) đảm bảo WINRATE cao
-    let score = 72;
+    // Tính điểm đánh giá (Score) đảm bảo xung lực mạnh
+    let score = 70;
+    if (hasSecondSpike) score += 10;
+
     if (distanceFromFootPct <= 1.8) score += 10;
     else if (distanceFromFootPct <= 3.0) score += 6;
 
-    if (volumeMultiplier >= 3.0 || volumeMultiplier3m >= 2.5) score += 10;
-    else if (volumeMultiplier >= 2.0 || volumeMultiplier3m >= 1.8) score += 6;
+    if (volumeMultiplier >= 2.5 || volumeMultiplier3m >= 2.0) score += 10;
+    else if (volumeMultiplier >= 1.6 || volumeMultiplier3m >= 1.4) score += 6;
 
-    if (takerBuyPct1m >= 68 || takerBuyPct3m >= 68) score += 10;
-    else if (takerBuyPct1m >= 58 || takerBuyPct3m >= 58) score += 6;
+    if (takerBuyPct1m >= 65 || takerBuyPct3m >= 65) score += 10;
+    else if (takerBuyPct1m >= 55 || takerBuyPct3m >= 55) score += 5;
 
-    if (distanceFromFoot15mPct <= 3.8) score += 8;
+    if (distanceFromFoot15mPct <= 4.0) score += 8;
     else score += 4;
 
     if (ticker24h.priceChangePercent <= 15.0 && ticker24h.priceChangePercent >= -10.0) score += 5;
 
     const forecastScore = Math.min(99, Math.round(score));
-    if (forecastScore < 78) return false;
+    if (forecastScore < 75) return false;
 
     // Cắt lỗ an toàn dưới đáy nền tích lũy, khống chế rủi ro an toàn
     let suggestedSl = baseMinLow * 0.995;
@@ -315,8 +330,8 @@ export class ScannerService implements OnApplicationBootstrap {
     }
 
     const lastAlert = this.symbolCooldowns.get(symbol) || 0;
-    if (now - lastAlert < 15 * 60 * 1000) return false;
-    if (now - this.lastGlobalAlertTime < 3000) return false;
+    if (now - lastAlert < 10 * 60 * 1000) return false;
+    if (now - this.lastGlobalAlertTime < 2500) return false;
 
     this.symbolCooldowns.set(symbol, now);
     this.lastGlobalAlertTime = now;
@@ -343,6 +358,10 @@ export class ScannerService implements OnApplicationBootstrap {
     const status1hText = `Tích lũy cạn cung, cấu trúc nâng đáy khung 1h`;
     const status15mText = `Bứt phá thoát đáy 15m, nến 15m nén chặt bật tăng`;
 
+    const velText = velocityData && velocityData.velocityPct > 0
+      ? `Biến động 5s: +${velocityData.velocityPct.toFixed(2)}% (Bơm ròng: +${Math.round(velocityData.volInflow).toLocaleString()} USDT), `
+      : '';
+
     const payload: VipSpikeAlertPayload = {
       symbol,
       currentPrice,
@@ -352,6 +371,8 @@ export class ScannerService implements OnApplicationBootstrap {
       priceChangePct: priceChange1mPct,
       distanceFromFootPct,
       baseMinLow,
+      secondVelocityPct: velocityData?.velocityPct,
+      secondVolInflow: velocityData?.volInflow,
       bottomRangePct: ticker24h.bottomRangePct,
       low24h: ticker24h.lowPrice,
       high24h: ticker24h.highPrice,
@@ -384,10 +405,12 @@ export class ScannerService implements OnApplicationBootstrap {
       suggestedTp2,
       suggestedSl,
       rewardRiskRatio: 3.2 / riskDistancePct,
-      analysisReason: `PHÁT HIỆN BẮT ĐẦU SÓNG TĂNG: Vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ đáy nền $${baseMinLow}, volume nổ ${volumeMultiplier.toFixed(1)}x, phe Mua áp đảo (Taker ${takerBuyPct1m.toFixed(1)}%), SL an toàn -${riskDistancePct.toFixed(2)}%.`,
+      analysisReason: `⚡ CẢNH BÁO DÒNG TIỀN VÀO MẠNH: ${velText}1m tăng +${priceChange1mPct.toFixed(2)}%, vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ nền đáy $${baseMinLow}, volume đột biến ${volumeMultiplier.toFixed(1)}x (Taker Mua ${takerBuyPct1m.toFixed(1)}%), SL an toàn -${riskDistancePct.toFixed(2)}%. Chuẩn bị bay, vào lệnh ngay!`,
     };
 
-    this.logger.warn(`👑 [BẮT ĐẦU SÓNG TĂNG] ${symbol} -> Điểm: ${forecastScore}/100 | SL: -${riskDistancePct.toFixed(2)}% | Entry: ${currentPrice}`);
+    this.logger.warn(
+      `🚀 [CẢNH BÁO DÒNG TIỀN VÀO MẠNH: CHUẨN BỊ BAY] ${symbol} -> 5s: +${velocityData?.velocityPct?.toFixed(2) || 0}% | 1m: +${priceChange1mPct.toFixed(2)}% | Entry: ${currentPrice} | Điểm: ${forecastScore}/100`,
+    );
     await this.telegramService.sendVipSpikeAlert(payload);
     return true;
   }
