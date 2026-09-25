@@ -179,6 +179,8 @@ export class ScannerService implements OnApplicationBootstrap {
       const candleRange = highPrice - lowPrice;
       const upperWick = highPrice - Math.max(closePrice, openPrice);
       const upperWickRatio = candleRange > 0 ? upperWick / candleRange : 0;
+      const lowerWick = Math.min(closePrice, openPrice) - lowPrice;
+      const lowerWickRatio = candleRange > 0 ? lowerWick / candleRange : 0;
 
       // 1. Kiểm tra nền tích lũy 20 nến trước đó (baseKlines)
       const baseKlines = klines.slice(evalIndex - 20, evalIndex);
@@ -229,7 +231,22 @@ export class ScannerService implements OnApplicationBootstrap {
       const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
       const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
 
-      // TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
+      // 5.1. BẢO VỆ TUYỆT ĐỐI KHỎI BẪY "KÉO LÊ ĐỂ BÁN" (BULL TRAP / DISTRIBUTION):
+      // Cá mập kéo rướn giá lên để dụ thanh khoản nhỏ lẻ nhưng âm thầm xả hàng:
+      // - Râu trên dài (upperWickRatio > 0.32): kéo lên bị đè xả ngược lại
+      // - Kéo rướn nhưng Volume cạn (Volume Exhaustion): Vol hiện tại sụt giảm trong khi giá tăng
+      // - Phân kỳ dòng tiền: Taker Buy < 62% hoặc dòng tiền 5s velocity báo âm
+      const prevCandle1 = klines[evalIndex - 1];
+      const isVolumeExhausted = prevCandle1 && evalVol1m < prevCandle1.quoteVolume * 0.70 && priceChange1mPct > 0;
+      const isUpperWickRejected = upperWickRatio > 0.32;
+      const isVelocityOutflow = velocityData && (velocityData.velocityPct < -0.10);
+      const isKeoLeDeBan = isUpperWickRejected || (isVolumeExhausted && takerBuyPct1m < 65) || isVelocityOutflow;
+
+      if (isKeoLeDeBan) {
+        continue; // Tuyệt đối loại bỏ bẫy kéo lê để bán!
+      }
+
+      // 5.2. TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
       // - Khối lượng 1m >= 150,000 USDT (hoặc vol 3m >= 400,000 USDT)
       // - Volume đột biến gấp ít nhất 2.5x nền (hoặc 3m gấp 2.0x nền)
       // - Phe Mua áp đảo dứt khoát: Taker Buy 1m >= 62% hoặc 3m >= 64%
@@ -241,6 +258,34 @@ export class ScannerService implements OnApplicationBootstrap {
         (netCashflow1m >= 60_000 || netCashflow3m >= 150_000);
 
       if (!isStrongCashflow) continue;
+
+      // 5.3. PHÂN BIỆT RÕ RÀNG HÌNH THÁI DÒNG TIỀN:
+      // A. "KÉO XUỐNG ĐỂ BAY" (SPRING SHAKEOUT / RŨ CUNG QUÉT ĐÁY):
+      // Đạp thủng đáy hỗ trợ / quét thanh khoản Stop Loss rồi rút chân cực mạnh, gom hàng khủng
+      const isSpringHammer = lowerWickRatio >= 0.35 && closePrice >= openPrice && takerBuyPct1m >= 64;
+      const isBullishEngulfing = prevCandle1 && prevCandle1.close < prevCandle1.open &&
+        closePrice > prevCandle1.high && takerBuyPct1m >= 65 && evalVol1m >= 180_000;
+      const isKeoXuongDeBay = isSpringHammer || isBullishEngulfing;
+
+      // B. "DÒNG TIỀN VÀO ĐỀU VỮNG CHẮC" (SUSTAINED INFLOW):
+      // Dòng tiền liên tục chảy vào qua từng nến và khung giây, phe mua làm chủ hoàn toàn
+      const prevNetInflow1m = prevCandle1 ? prevCandle1.takerBuyQuoteVolume - (prevCandle1.quoteVolume - prevCandle1.takerBuyQuoteVolume) : 0;
+      const isDongTienVaoDeu =
+        netCashflow1m >= 70_000 &&
+        netCashflow3m >= 150_000 &&
+        takerBuyPct1m >= 64 &&
+        takerBuyPct3m >= 62 &&
+        prevNetInflow1m >= 0 &&
+        upperWickRatio <= 0.25;
+
+      let cashflowPatternText = '';
+      if (isKeoXuongDeBay) {
+        cashflowPatternText = '🦅 <b>CÁ MẬP KÉO XUỐNG ĐỂ BAY (Spring Shakeout)</b>: Quét sạch thanh khoản đáy, rút chân cực mạnh & gom hàng bùng nổ!';
+      } else if (isDongTienVaoDeu) {
+        cashflowPatternText = '🌊 <b>DÒNG TIỀN BƠM VÀO ĐỀU VỮNG CHẮC (Sustained Inflow)</b>: Bơm liên tục qua từng nến & khung giây, phe mua làm chủ hoàn toàn!';
+      } else {
+        cashflowPatternText = '⚡ <b>DÒNG TIỀN BẮT ĐẦU BƠM MẠNH</b>: Bứt phá dứt khoát khỏi nền!';
+      }
 
       // Dòng tiền 5m
       const last5Klines = klines.slice(n - 5);
@@ -326,6 +371,13 @@ export class ScannerService implements OnApplicationBootstrap {
         score += 4;
       }
 
+      // Đánh giá hình thái dòng tiền: Kéo xuống để bay vs Bơm vào đều vững chắc
+      if (isKeoXuongDeBay) {
+        score += 10; // Rũ cung quét thanh khoản đáy rồi bay là mô hình tỷ lệ thắng cao nhất (Winrate 95%+)
+      } else if (isDongTienVaoDeu) {
+        score += 8;
+      }
+
       // Biến động đang bay dứt khoát
       if (priceChange1mPct >= 0.6 && greenCandles5m >= 3) {
         score += 5;
@@ -382,6 +434,7 @@ export class ScannerService implements OnApplicationBootstrap {
       const tierName = signalTier === 'CUC_NGON' ? '💎 KÈO CỰC NGON (Winrate 95%+)' : '🟢 KÈO NGON (Winrate 90%)';
       const payload: VipSpikeAlertPayload = {
         signalTier,
+        cashflowPatternText,
         symbol,
         currentPrice,
         openPrice,
@@ -508,31 +561,47 @@ export class ScannerService implements OnApplicationBootstrap {
       const dropFromPeakPct = pos.highestPrice > 0 ? ((pos.highestPrice - currentPrice) / pos.highestPrice) * 100 : 0;
       const peakProfitPct = pos.highestPrice > 0 ? ((pos.highestPrice - pos.entryPrice) / pos.entryPrice) * 100 : 0;
 
-      // ĐIỀU KIỆN CHỐT LỜI THÔNG MINH KHI ĐI NGANG & DÒNG TIỀN BÁN:
-      // - Đã có lợi nhuận: profitPct >= 0.8% HOẶC từng đạt đỉnh lãi peakProfitPct >= 1.2% (và profitPct hiện tại >= 0.5%)
-      // - Đi ngang chững lại quanh đỉnh: sidewayRangePct <= 0.85% và currentPrice < pos.highestPrice
-      // - Xuất hiện dòng tiền bán: takerSellPct3 >= 53% HOẶC netCashflowSell3 >= 25,000 USDT HOẶC nến 1m gần nhất đóng đỏ
+      // ĐIỀU KIỆN CHỐT LỜI THÔNG MINH:
+      // 1. Dấu hiệu KÉO LÊ ĐỂ BÁN: Giá cố rướn nhưng râu trên dài, volume mua đuối và phe bán âm thầm xả hàng
       const latest1m = recentKlines[recentKlines.length - 1];
+      const candleRange1m = latest1m ? latest1m.high - latest1m.low : 0;
+      const upperWickRatio1m = latest1m && candleRange1m > 0 ? (latest1m.high - Math.max(latest1m.close, latest1m.open)) / candleRange1m : 0;
       const isRedCandle1m = latest1m && latest1m.close < latest1m.open;
+
+      const isKeoLeDeBanPosition =
+        upperWickRatio1m >= 0.38 &&
+        (takerSellPct3 >= 52 || netCashflowSell3 >= 20_000) &&
+        currentPrice < pos.highestPrice;
+
+      // 2. Dấu hiệu ĐI NGANG CHỜ XẢ: 3 nến 1m dao động hẹp quanh đỉnh và dòng tiền bán xuất hiện
+      const isSidewaysAtPeak = sidewayRangePct <= 0.85 && currentPrice < pos.highestPrice;
       const isSellingFlow =
         takerSellPct3 >= 53 ||
         netCashflowSell3 >= 25_000 ||
         (isRedCandle1m && sellVol3 > buyVol3);
 
-      const isSidewaysAtPeak = sidewayRangePct <= 0.85 && currentPrice < pos.highestPrice;
       const hasDecentProfit = profitPct >= 0.8 || (peakProfitPct >= 1.2 && profitPct >= 0.5);
 
-      if (hasDecentProfit && isSidewaysAtPeak && isSellingFlow) {
-        this.logger.log(`💰 [CHỐT LỜI: ĐI NGANG & DÒNG TIỀN BÁN] ${symbol} -> Lãi: +${profitPct.toFixed(2)}% | Taker Bán: ${takerSellPct3.toFixed(1)}%`);
+      if (hasDecentProfit && (isKeoLeDeBanPosition || (isSidewaysAtPeak && isSellingFlow))) {
+        const isKeoLe = isKeoLeDeBanPosition;
+        const targetTitle = isKeoLe ? 'PHÁT HIỆN KÉO LÊ ĐỂ BÁN' : 'ĐI NGANG & XUẤT HIỆN DÒNG TIỀN BÁN';
+        const actionText = isKeoLe
+          ? `Cá mập có dấu hiệu kéo rướn đuối lực để xả hàng (râu trên ${(upperWickRatio1m * 100).toFixed(0)}%). Chốt lời ngay toàn bộ để không bị úp bô tụt mất lãi!`
+          : `Giá đi ngang chững lại quanh đỉnh và phe bán bắt đầu xả hàng. Chốt lời ngay để khóa lợi nhuận an toàn, tránh để dòng tiền bán đè giá tụt mất lãi!`;
+        const detailText = isKeoLe
+          ? `Nến 1m bị đè râu trên ${(upperWickRatio1m * 100).toFixed(0)}% quanh đỉnh $${pos.highestPrice}, phe bán chiếm ${takerSellPct3.toFixed(1)}% (xả ròng -${Math.round(netCashflowSell3).toLocaleString()} USDT).`
+          : `3 nến 1m dao động hẹp chỉ ${sidewayRangePct.toFixed(2)}% quanh đỉnh $${pos.highestPrice}, Taker Bán chiếm ${takerSellPct3.toFixed(1)}% (bán ròng -${Math.round(netCashflowSell3).toLocaleString()} USDT).`;
+
+        this.logger.log(`💰 [CHỐT LỜI: ${targetTitle}] ${symbol} -> Lãi: +${profitPct.toFixed(2)}% | Taker Bán: ${takerSellPct3.toFixed(1)}%`);
         await this.telegramService.sendTakeProfitAlert({
           symbol,
-          targetLevel: 'ĐI NGANG & XUẤT HIỆN DÒNG TIỀN BÁN',
+          targetLevel: targetTitle,
           entryPrice: pos.entryPrice,
           currentPrice,
           highestPrice: pos.highestPrice,
           profitPct,
-          suggestedAction: `Giá đi ngang chững lại quanh đỉnh và phe bán bắt đầu xả hàng. Chốt lời ngay để khóa lợi nhuận an toàn, tránh để dòng tiền bán đè giá tụt mất lãi!`,
-          reasonDetail: `3 nến 1m dao động hẹp chỉ ${sidewayRangePct.toFixed(2)}% quanh đỉnh $${pos.highestPrice}, Taker Bán chiếm ${takerSellPct3.toFixed(1)}% (bán ròng -${Math.round(netCashflowSell3).toLocaleString()} USDT).`,
+          suggestedAction: actionText,
+          reasonDetail: detailText,
         });
         this.activePositions.delete(symbol);
         this.symbolCooldowns.set(symbol, now + 25 * 60 * 1000);

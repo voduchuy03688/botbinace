@@ -4,6 +4,7 @@ import axios from 'axios';
 
 export interface VipSpikeAlertPayload {
   signalTier?: 'CUC_NGON' | 'NGON';
+  cashflowPatternText?: string;
   symbol: string;
   currentPrice: number;
   openPrice: number;
@@ -205,6 +206,11 @@ export class TelegramService {
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       qualityText,
+      ...(payload.cashflowPatternText
+        ? [
+            `• <b>Dấu Ấn Dòng Tiền:</b> ${payload.cashflowPatternText}`,
+          ]
+        : []),
       '----------------------------------------',
       '⚡ <b>BIẾN ĐỘNG DÒNG TIỀN BƠM MẠNH (GIÂY & PHÚT):</b>',
       ...(payload.secondVelocityPct !== undefined && payload.secondVelocityPct > 0
