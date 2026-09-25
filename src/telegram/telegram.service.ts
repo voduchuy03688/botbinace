@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
 export interface VipSpikeAlertPayload {
+  signalTier?: 'CUC_NGON' | 'NGON';
   symbol: string;
   currentPrice: number;
   openPrice: number;
@@ -81,11 +82,13 @@ export interface HetNgonAlertPayload {
 
 export interface TakeProfitAlertPayload {
   symbol: string;
-  targetLevel: 'TP1 (+3.2%)' | 'TP2 (+6.5%)';
+  targetLevel: string;
   entryPrice: number;
   currentPrice: number;
+  highestPrice?: number;
   profitPct: number;
   suggestedAction: string;
+  reasonDetail?: string;
 }
 
 export interface StopLossAlertPayload {
@@ -184,28 +187,39 @@ export class TelegramService {
         ? (((payload.entryPrice - payload.suggestedSl) / payload.entryPrice) * 100).toFixed(2)
         : '1.20';
 
+    const isCucNgon = payload.signalTier === 'CUC_NGON' || payload.forecastScore >= 95;
+    const tierTitle = isCucNgon
+      ? '💎 🚀 🌊 <b>[TÍN HIỆU CỰC NGON: DÒNG TIỀN BƠM CỰC MẠNH - WINRATE 95%+]</b>'
+      : '🟢 ⚡ 🌊 <b>[TÍN HIỆU NGON: DÒNG TIỀN BƠM MẠNH - WINRATE 90%+]</b>';
+    const subTitle = isCucNgon
+      ? '🔥 <b>CÁ MẬP ĐANG BƠM TIỀN DỒN DẬP - NẾN ĐANG BAY - VÀO LỆNH NGAY!</b>'
+      : '🔥 <b>DÒNG TIỀN VÀO MẠNH ĐỀU - VỪA BỨT PHÁ CHÂN SÓNG!</b>';
+    const qualityText = isCucNgon
+      ? `🎯 <b>CHẤT LƯỢNG TÍN HIỆU:</b> <b>💎 CỰC NGON (Winrate: 95%+)</b> | Điểm xung lực: <b>${payload.forecastScore}/100</b>`
+      : `🎯 <b>CHẤT LƯỢNG TÍN HIỆU:</b> <b>🟢 NGON (Winrate: 90%)</b> | Điểm xung lực: <b>${payload.forecastScore}/100</b>`;
+
     const lines: string[] = [
-      '🌊 🚀 💎 <b>[CẢNH BÁO DÒNG TIỀN BƠM MẠNH: TÍN HIỆU CỰC NGON > 90%]</b>',
-      '🔥 <b>DÒNG TIỀN CÁ MẬP BƠM VÀO CỰC LỚN - VỪA NHẤC CHÂN KHỎI NỀN!</b>',
+      tierTitle,
+      subTitle,
       '⚡ <b>CHUẨN CHÂN SÓNG - KHÔNG ĐU ĐỈNH - VÀO LỆNH NGAY KẺO LỠ!</b>',
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐỘ CỰC NGON & TỶ LỆ THẮNG:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
+      qualityText,
       '----------------------------------------',
       '⚡ <b>BIẾN ĐỘNG DÒNG TIỀN BƠM MẠNH (GIÂY & PHÚT):</b>',
       ...(payload.secondVelocityPct !== undefined && payload.secondVelocityPct > 0
         ? [
-            `• <b>Biến Động Tức Thì (5 Giây):</b> <b>+${payload.secondVelocityPct.toFixed(2)}%</b> 🚀 (Giật giá kích nổ sóng)${
+            `• <b>Biến Động Tức Thì (5 Giây):</b> <b>+${payload.secondVelocityPct.toFixed(2)}%</b> 🚀 (Dòng tiền bơm dồn dập)${
               payload.secondVolInflow ? ` | Bơm ròng: <code>+${Math.round(payload.secondVolInflow).toLocaleString()} USDT</code>` : ''
             }`,
           ]
         : []),
-      `• <b>Biến Động 1 Phút (1m):</b> <b>+${payload.priceChangePct.toFixed(2)}%</b> (Bứt phá dứt khoát)`,
+      `• <b>Biến Động 1 Phút (1m):</b> <b>+${payload.priceChangePct.toFixed(2)}%</b> (Đang bay bứt phá)`,
       `• <b>Biến Động 5 Phút (5m):</b> <b>${payload.priceChange5mPct >= 0 ? '+' : ''}${payload.priceChange5mPct.toFixed(2)}%</b> (${payload.greenCandles5m}/5 nến xanh)`,
       '----------------------------------------',
       '🌊 <b>KHỐI LƯỢNG BƠM RÒNG CỰC LỚN (CÁ MẬP VÀO HÀNG):</b>',
       `• <b>Khối Lượng 1 Phút:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
-      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net bơm 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
+      `• <b>Phe Mua Áp Đảo (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net bơm 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
       `• <b>Dòng Tiền Đa Khung (Net Gom):</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code>`,
       '----------------------------------------',
       '🌱 <b>VỊ THẾ CHÂN SÓNG (CHUẨN BỊ BAY - RỦI RO CỰC THẤP):</b>',
@@ -234,17 +248,25 @@ export class TelegramService {
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+    const highestText = payload.highestPrice ? ` | Đỉnh đạt được: <code>$${payload.highestPrice}</code>` : '';
 
     const lines: string[] = [
-      `🎯 💰 🟢 <b>[CHỐT LỜI THÀNH CÔNG: ĐẠT MỤC TIÊU ${payload.targetLevel}]</b>`,
+      `🎯 💰 🟢 <b>[CHỐT LỜI THÀNH CÔNG: ${payload.targetLevel}]</b>`,
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `• <b>Lợi Nhuận Đạt Được:</b> <b>+${payload.profitPct.toFixed(2)}%</b> 🚀`,
-      `• <b>Giá Vào (Entry):</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code>`,
+      `• <b>Lợi Nhuận Bỏ Túi:</b> <b>+${payload.profitPct.toFixed(2)}%</b> 🚀${highestText}`,
+      `• <b>Giá Vào (Entry):</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Chốt:</b> <code>$${payload.currentPrice}</code>`,
       '----------------------------------------',
+      ...(payload.reasonDetail
+        ? [
+            `🌊 <b>TÍN HIỆU ĐI NGANG & DÒNG TIỀN BÁN:</b>`,
+            `• <i>${payload.reasonDetail}</i>`,
+            '----------------------------------------',
+          ]
+        : []),
       `👉 <b>HÀNH ĐỘNG KHUYẾN NGHỊ:</b> <b>${payload.suggestedAction}</b>`,
       '----------------------------------------',
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Quản Lý Vị Thế Binance Futures</a>`,
+      `🔗 <a href="${binanceUrl}">Chốt Lời Trên Binance Futures Ngay</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));

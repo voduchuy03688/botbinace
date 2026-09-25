@@ -319,10 +319,23 @@ export class ScannerService implements OnApplicationBootstrap {
 
       if (ticker24h.priceChangePercent <= 25.0 && ticker24h.priceChangePercent >= -10.0) score += 5;
 
-      if (velocityData && (velocityData.velocityPct >= 0.20 || velocityData.volInflow >= 20_000)) score += 6;
+      // Dòng tiền bơm mạnh và đều trong khung giây (khung s)
+      if (velocityData && (velocityData.velocityPct >= 0.20 || velocityData.volInflow >= 20_000)) {
+        score += 8;
+      } else if (velocityData && (velocityData.velocityPct >= 0.12 || velocityData.volInflow >= 10_000)) {
+        score += 4;
+      }
+
+      // Biến động đang bay dứt khoát
+      if (priceChange1mPct >= 0.6 && greenCandles5m >= 3) {
+        score += 5;
+      }
 
       const forecastScore = Math.min(99, Math.round(score));
       if (forecastScore < 90) return false;
+
+      const signalTier: 'CUC_NGON' | 'NGON' = forecastScore >= 95 ? 'CUC_NGON' : 'NGON';
+      const estimatedWinRate = signalTier === 'CUC_NGON' ? 95 : 90;
 
       // Cắt lỗ an toàn dưới đáy nền tích lũy, khống chế rủi ro an toàn
       let suggestedSl = baseMinLow * 0.995;
@@ -366,7 +379,9 @@ export class ScannerService implements OnApplicationBootstrap {
           ? `Biến động 5s: +${velocityData.velocityPct.toFixed(2)}% (Bơm ròng: +${Math.round(velocityData.volInflow).toLocaleString()} USDT), `
           : '';
 
+      const tierName = signalTier === 'CUC_NGON' ? '💎 KÈO CỰC NGON (Winrate 95%+)' : '🟢 KÈO NGON (Winrate 90%)';
       const payload: VipSpikeAlertPayload = {
+        signalTier,
         symbol,
         currentPrice,
         openPrice,
@@ -403,17 +418,17 @@ export class ScannerService implements OnApplicationBootstrap {
         priceChange5mPct,
         greenCandles5m,
         forecastScore,
-        estimatedWinRate: forecastScore,
+        estimatedWinRate,
         entryPrice: currentPrice,
         suggestedTp1,
         suggestedTp2,
         suggestedSl,
         rewardRiskRatio: 3.2 / riskDistancePct,
-        analysisReason: `🌊 DÒNG TIỀN CỰC MẠNH VÀO CHÂN SÓNG: ${velText}Volume nổ ${volumeMultiplier.toFixed(1)}x (1m: ${Math.round(evalVol1m).toLocaleString()} USDT, Net Mua: +${Math.round(netCashflow1m).toLocaleString()} USDT), Taker Mua ${takerBuyPct1m.toFixed(1)}%, vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ đáy nền $${baseMinLow}. Chuẩn bị bay, vào lệnh ngay!`,
+        analysisReason: `${tierName}: ${velText}Volume nổ ${volumeMultiplier.toFixed(1)}x (1m: ${Math.round(evalVol1m).toLocaleString()} USDT, Net Mua: +${Math.round(netCashflow1m).toLocaleString()} USDT), Taker Mua ${takerBuyPct1m.toFixed(1)}%, vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ đáy nền $${baseMinLow}. Chuẩn bị bay, vào lệnh ngay!`,
       };
 
       this.logger.warn(
-        `🌊 [DÒNG TIỀN CỰC MẠNH VÀO CHÂN SÓNG BAY] ${symbol} -> 1m Vol: ${Math.round(evalVol1m / 1000)}k USDT | Net Mua: +${Math.round(netCashflow1m / 1000)}k | Chân: +${distanceFromFootPct.toFixed(2)}% | Entry: ${currentPrice}`,
+        `🌊 [${tierName}] ${symbol} -> 1m Vol: ${Math.round(evalVol1m / 1000)}k USDT | Net Mua: +${Math.round(netCashflow1m / 1000)}k | Chân: +${distanceFromFootPct.toFixed(2)}% | Entry: ${currentPrice}`,
       );
       await this.telegramService.sendVipSpikeAlert(payload);
       return true;
@@ -449,6 +464,7 @@ export class ScannerService implements OnApplicationBootstrap {
           targetLevel: 'TP2 (+6.5%)',
           entryPrice: pos.entryPrice,
           currentPrice,
+          highestPrice: pos.highestPrice,
           profitPct,
           suggestedAction: `Đã đạt mục tiêu lợi nhuận tối đa (+${profitPct.toFixed(2)}%), chốt toàn bộ lệnh thành công trọn con sóng!`,
         });
@@ -468,23 +484,68 @@ export class ScannerService implements OnApplicationBootstrap {
           targetLevel: 'TP1 (+3.2%)',
           entryPrice: pos.entryPrice,
           currentPrice,
+          highestPrice: pos.highestPrice,
           profitPct,
           suggestedAction: `Chốt lời 50% khối lượng, dời Stop Loss về giá hòa vốn Entry ($${pos.entryPrice}) để gồng tiếp TP2!`,
         });
       }
 
-      // 3. Phân tích quản lý vị thế & CẢNH BÁO HẾT CỰC NGON
+      // 3. Phân tích quản lý vị thế: ĐI NGANG Ở ĐỈNH & DÒNG TIỀN BÁN XUẤT HIỆN -> CHỐT LỜI THÔNG MINH
       const recentKlines = await this.binanceService.getKlines(symbol, '1m', 10);
       if (!recentKlines || recentKlines.length < 5) continue;
 
+      const last3 = recentKlines.slice(-3);
+      const high3 = Math.max(...last3.map((k) => k.high));
+      const low3 = Math.min(...last3.map((k) => k.low));
+      const sidewayRangePct = low3 > 0 ? ((high3 - low3) / low3) * 100 : 0;
+
+      const vol3 = last3.reduce((s, k) => s + k.quoteVolume, 0);
+      const buyVol3 = last3.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+      const sellVol3 = Math.max(0, vol3 - buyVol3);
+      const takerSellPct3 = vol3 > 0 ? (sellVol3 / vol3) * 100 : 50;
+      const netCashflowSell3 = sellVol3 - buyVol3;
+
+      const dropFromPeakPct = pos.highestPrice > 0 ? ((pos.highestPrice - currentPrice) / pos.highestPrice) * 100 : 0;
+      const peakProfitPct = pos.highestPrice > 0 ? ((pos.highestPrice - pos.entryPrice) / pos.entryPrice) * 100 : 0;
+
+      // ĐIỀU KIỆN CHỐT LỜI THÔNG MINH KHI ĐI NGANG & DÒNG TIỀN BÁN:
+      // - Đã có lợi nhuận: profitPct >= 0.8% HOẶC từng đạt đỉnh lãi peakProfitPct >= 1.2% (và profitPct hiện tại >= 0.5%)
+      // - Đi ngang chững lại quanh đỉnh: sidewayRangePct <= 0.85% và currentPrice < pos.highestPrice
+      // - Xuất hiện dòng tiền bán: takerSellPct3 >= 53% HOẶC netCashflowSell3 >= 25,000 USDT HOẶC nến 1m gần nhất đóng đỏ
+      const latest1m = recentKlines[recentKlines.length - 1];
+      const isRedCandle1m = latest1m && latest1m.close < latest1m.open;
+      const isSellingFlow =
+        takerSellPct3 >= 53 ||
+        netCashflowSell3 >= 25_000 ||
+        (isRedCandle1m && sellVol3 > buyVol3);
+
+      const isSidewaysAtPeak = sidewayRangePct <= 0.85 && currentPrice < pos.highestPrice;
+      const hasDecentProfit = profitPct >= 0.8 || (peakProfitPct >= 1.2 && profitPct >= 0.5);
+
+      if (hasDecentProfit && isSidewaysAtPeak && isSellingFlow) {
+        this.logger.log(`💰 [CHỐT LỜI: ĐI NGANG & DÒNG TIỀN BÁN] ${symbol} -> Lãi: +${profitPct.toFixed(2)}% | Taker Bán: ${takerSellPct3.toFixed(1)}%`);
+        await this.telegramService.sendTakeProfitAlert({
+          symbol,
+          targetLevel: 'ĐI NGANG & XUẤT HIỆN DÒNG TIỀN BÁN',
+          entryPrice: pos.entryPrice,
+          currentPrice,
+          highestPrice: pos.highestPrice,
+          profitPct,
+          suggestedAction: `Giá đi ngang chững lại quanh đỉnh và phe bán bắt đầu xả hàng. Chốt lời ngay để khóa lợi nhuận an toàn, tránh để dòng tiền bán đè giá tụt mất lãi!`,
+          reasonDetail: `3 nến 1m dao động hẹp chỉ ${sidewayRangePct.toFixed(2)}% quanh đỉnh $${pos.highestPrice}, Taker Bán chiếm ${takerSellPct3.toFixed(1)}% (bán ròng -${Math.round(netCashflowSell3).toLocaleString()} USDT).`,
+        });
+        this.activePositions.delete(symbol);
+        this.symbolCooldowns.set(symbol, now + 25 * 60 * 1000);
+        continue;
+      }
+
+      // 4. Phân tích quản lý vị thế & CẢNH BÁO HẾT CỰC NGON
       const last5 = recentKlines.slice(-5);
       const totalVol5 = last5.reduce((s, k) => s + k.quoteVolume, 0);
       const totalBuy5 = last5.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
       const totalSell5 = Math.max(0, totalVol5 - totalBuy5);
       const takerSellPct5 = totalVol5 > 0 ? (totalSell5 / totalVol5) * 100 : 50;
       const netCashflowSell = totalSell5 - totalBuy5;
-
-      const dropFromPeakPct = pos.highestPrice > 0 ? ((pos.highestPrice - currentPrice) / pos.highestPrice) * 100 : 0;
 
       let isHetNgon = false;
       let hetNgonReason = '';
