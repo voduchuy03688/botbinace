@@ -184,9 +184,9 @@ export class TelegramService {
         : '1.20';
 
     const lines: string[] = [
-      '🚀 ⚡ 💎 <b>[CẢNH BÁO DÒNG TIỀN VÀO MẠNH: CHUẨN BỊ BAY]</b>',
-      '🔥 <b>PHÁT HIỆN BIẾN ĐỘNG GIÂY & PHÚT - DÒNG TIỀN CÁ MẬP VÀO HÀNG!</b>',
-      '🌟 <b>VÙNG CHÂN SÓNG BỨT PHÁ - VÀO LỆNH NGAY KẺO LỠ!</b>',
+      '🌊 🚀 💎 <b>[CẢNH BÁO: DÒNG TIỀN CỰC MẠNH VÀO CHÂN SÓNG BAY]</b>',
+      '🔥 <b>DÒNG TIỀN CÁ MẬP ĐỔ VÀO CỰC LỚN - VỪA NHẤC CHÂN KHỎI NỀN!</b>',
+      '⚡ <b>CHUẨN CHÂN SÓNG - KHÔNG ĐU ĐỈNH - VÀO LỆNH NGAY KẺO LỠ!</b>',
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
       `🎯 <b>ĐỘ MẠNH DÒNG TIỀN & XUNG LỰC:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,

@@ -116,11 +116,11 @@ export class BinanceService {
   }
 
   // Danh sách coin có tốc độ giá tăng vọt & dòng tiền đổ vào tức thì (Realtime 5s Price & Cashflow Velocity)
-  getHotVelocitySymbols(minVelocityPct = 0.20, minInflow = 5_000): string[] {
+  getHotVelocitySymbols(minVelocityPct = 0.15, minInflow = 8_000): string[] {
     const hotList: { symbol: string; score: number }[] = [];
     for (const [symbol, data] of this.velocityMap.entries()) {
       if (
-        (data.velocityPct >= minVelocityPct || (data.velocityPct >= 0.15 && data.volInflow >= minInflow)) &&
+        (data.velocityPct >= minVelocityPct || (data.velocityPct >= 0.10 && data.volInflow >= minInflow)) &&
         this.ticker24hMap.has(symbol)
       ) {
         hotList.push({ symbol, score: data.velocityPct * 10 + data.volInflow / 10_000 });
@@ -134,7 +134,7 @@ export class BinanceService {
   }
 
   // Lấy toàn bộ danh sách coin hợp lệ cho quét sóng tăng (Loại trừ coin sập quá sâu hoặc đã bay quá xa đu đỉnh)
-  getEligibleMoversPool(minVol = 1_500_000, min24hChange = -25.0, max24hChange = 35.0): Ticker24hData[] {
+  getEligibleMoversPool(minVol = 1_500_000, min24hChange = -25.0, max24hChange = 65.0): Ticker24hData[] {
     return Array.from(this.ticker24hMap.values()).filter((t) => {
       return (
         t.quoteVolume >= minVol &&
