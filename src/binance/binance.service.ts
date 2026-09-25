@@ -36,10 +36,12 @@ export class BinanceService {
     Accept: 'application/json',
   };
 
-  // Lọc các coin Futures có thanh khoản 24h >= 3,000,000 USDT (loại bỏ coin rác kém thanh khoản, tránh bẫy giật ảo)
-  private readonly MIN_VOLUME_24H_USDT = 3_000_000;
+  // Lọc các coin Futures có thanh khoản 24h >= 1,500,000 USDT (loại bỏ coin rác kém thanh khoản, tránh bẫy giật ảo)
+  private readonly MIN_VOLUME_24H_USDT = 1_500_000;
 
   private ticker24hMap: Map<string, Ticker24hData> = new Map();
+  private previousPriceMap: Map<string, { price: number; timestamp: number }> = new Map();
+  private velocityMap: Map<string, number> = new Map();
 
   async refreshTickers24h(): Promise<Map<string, Ticker24hData>> {
     try {
@@ -48,6 +50,7 @@ export class BinanceService {
       const rawList = res.data || [];
 
       this.ticker24hMap.clear();
+      const now = Date.now();
 
       for (const item of rawList) {
         if (!item.symbol || !item.symbol.endsWith('USDT')) continue;
@@ -64,6 +67,14 @@ export class BinanceService {
 
         const range = highPrice - lowPrice;
         const bottomRangePct = range > 0 ? Math.max(0, Math.min(100, ((lastPrice - lowPrice) / range) * 100)) : 50;
+
+        // Tính toán tốc độ biến động giá tức thì giữa 2 lần quét (Price Velocity)
+        const prev = this.previousPriceMap.get(item.symbol);
+        if (prev && prev.price > 0) {
+          const velocity = ((lastPrice - prev.price) / prev.price) * 100;
+          this.velocityMap.set(item.symbol, velocity);
+        }
+        this.previousPriceMap.set(item.symbol, { price: lastPrice, timestamp: now });
 
         this.ticker24hMap.set(item.symbol, {
           symbol: item.symbol,
@@ -92,6 +103,28 @@ export class BinanceService {
 
   getAllTickers24h(): Ticker24hData[] {
     return Array.from(this.ticker24hMap.values());
+  }
+
+  // Danh sách coin có tốc độ giá tăng vọt tức thì (Realtime Price Velocity)
+  getHotVelocitySymbols(minVelocityPct = 0.35): string[] {
+    const hotList: { symbol: string; velocity: number }[] = [];
+    for (const [symbol, vel] of this.velocityMap.entries()) {
+      if (vel >= minVelocityPct && this.ticker24hMap.has(symbol)) {
+        hotList.push({ symbol, velocity: vel });
+      }
+    }
+    return hotList.sort((a, b) => b.velocity - a.velocity).map((item) => item.symbol);
+  }
+
+  // Lấy toàn bộ danh sách coin hợp lệ cho quét sóng tăng (Loại trừ coin sập quá sâu hoặc đã bay quá xa đu đỉnh)
+  getEligibleMoversPool(minVol = 1_500_000, min24hChange = -25.0, max24hChange = 35.0): Ticker24hData[] {
+    return Array.from(this.ticker24hMap.values()).filter((t) => {
+      return (
+        t.quoteVolume >= minVol &&
+        t.priceChangePercent >= min24hChange &&
+        t.priceChangePercent <= max24hChange
+      );
+    });
   }
 
   // Lọc nhanh các token đang nằm trong VÙNG ĐÁY TÍCH LŨY (Bottom Zone)

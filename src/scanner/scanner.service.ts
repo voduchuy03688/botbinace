@@ -28,26 +28,28 @@ export class ScannerService implements OnApplicationBootstrap {
   private lastGlobalAlertTime = 0;
   private isScanning = false;
 
+  private sweepIndex = 0;
+
   constructor(
     private readonly binanceService: BinanceService,
     private readonly telegramService: TelegramService,
   ) {}
 
   async onApplicationBootstrap() {
-    this.logger.log('Khởi tạo Scanner: CHỈ BẮT ĐÚNG TRÚNG CHÂN SÓNG TĂNG (CỰC KÌ NGON - WINRATE > 95%)...');
+    this.logger.log('Khởi tạo Scanner: TỰ ĐỘNG BẮT ĐÚNG THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY WAVE BREAKOUT)...');
     await this.refreshMarketData();
-    this.logger.log('Scanner hoạt động: Lọc bứt phá nền đáy, rủi ro thấp ăn nhiều, dòng tiền cực mạnh.');
+    this.logger.log('Scanner hoạt động: Quét đa khung giờ toàn bộ Futures, bắt trúng chân sóng dòng tiền lớn.');
   }
 
-  // Cập nhật dữ liệu Ticker 24h định kỳ mỗi 3 phút
-  @Cron('0 */3 * * * *')
+  // Cập nhật dữ liệu Ticker 24h định kỳ mỗi 2 phút (dự phòng)
+  @Cron('0 */2 * * * *')
   async refreshMarketData() {
     await this.binanceService.refreshTickers24h();
   }
 
   // =========================================================================
   // QUÉT REALTIME ĐA KHUNG THỜI GIAN (20 GIÂY/LẦN)
-  // Chỉ tìm token ở vùng đáy bắt đầu bứt phá chân sóng tăng với thanh khoản lớn
+  // Quét toàn bộ thị trường, ưu tiên coin giật giá tức thì + top tăng/volume + quét xoay vòng
   // =========================================================================
   @Cron('*/20 * * * * *')
   async handleRealtimeScan() {
@@ -55,34 +57,66 @@ export class ScannerService implements OnApplicationBootstrap {
 
     this.isScanning = true;
     try {
-      // 1. Quản lý và theo dõi các vị thế đang chạy (TP1 +3.2%, TP2 +6.5%, hoặc SL an toàn)
+      // 1. Cập nhật dữ liệu Ticker 24h & Price Velocity tức thì
+      await this.binanceService.refreshTickers24h();
+
+      // 2. Quản lý và theo dõi các vị thế đang chạy (TP1 +3.2%, TP2 +6.5%, hoặc SL an toàn)
       await this.trackActivePositions();
 
-      // 2. Lấy danh sách toàn bộ coin Futures
-      const allTickers = this.binanceService.getAllTickers24h();
-      if (allTickers.length === 0) return;
+      // 3. Lấy danh sách toàn bộ coin Futures hợp lệ (vol >= 1.5M USDT, 24h change trong khoảng -25% đến +35%)
+      const eligibleTickers = this.binanceService.getEligibleMoversPool(1_500_000, -25.0, 35.0);
+      if (eligibleTickers.length === 0) return;
 
       const now = Date.now();
-      const validTickers = allTickers.filter((t) => {
-        const lastAlert = this.symbolCooldowns.get(t.symbol) || 0;
+      const isAvailable = (sym: string) => {
+        const lastAlert = this.symbolCooldowns.get(sym) || 0;
         return now - lastAlert > 15 * 60 * 1000; // Cooldown 15 phút mỗi coin
-      });
+      };
 
-      // LỌC NHANH: CHỈ TẬP TRUNG TOKEN VÙNG ĐÁY CHÂN SÓNG TĂNG + THANH KHOẢN CAO (>= 5M USDT)
-      const bottomCandidates = validTickers.filter(
+      // ƯU TIÊN 1: Các coin đang có tốc độ giật giá tăng vọt tức thì (Realtime Velocity >= 0.30%)
+      const velocityHotSymbols = this.binanceService.getHotVelocitySymbols(0.30).filter(isAvailable);
+
+      // ƯU TIÊN 2: Top tăng giá mạnh nhất ngày (Gainers)
+      const topGainers = [...eligibleTickers]
+        .sort((a, b) => b.priceChangePercent - a.priceChangePercent)
+        .slice(0, 25)
+        .map((t) => t.symbol)
+        .filter(isAvailable);
+
+      // ƯU TIÊN 3: Top thanh khoản lớn nhất ngày (Volume)
+      const topVolume = [...eligibleTickers]
+        .sort((a, b) => b.quoteVolume - a.quoteVolume)
+        .slice(0, 25)
+        .map((t) => t.symbol)
+        .filter(isAvailable);
+
+      // ƯU TIÊN 4: Quét xoay vòng (Round-robin sweep) toàn bộ thị trường để không bỏ sót bất kỳ coin nào
+      const remainingTickers = eligibleTickers.filter(
         (t) =>
-          t.quoteVolume >= 5_000_000 &&
-          t.bottomRangePct <= 35 &&
-          t.priceChangePercent <= 6.0 &&
-          t.priceChangePercent >= -15.0,
+          isAvailable(t.symbol) &&
+          !velocityHotSymbols.includes(t.symbol) &&
+          !topGainers.includes(t.symbol) &&
+          !topVolume.includes(t.symbol),
       );
 
-      const targetPool = bottomCandidates.slice(0, 100);
+      const sweepBatchSize = 25;
+      const sweepSymbols = remainingTickers
+        .slice(this.sweepIndex, this.sweepIndex + sweepBatchSize)
+        .map((t) => t.symbol);
+      this.sweepIndex =
+        remainingTickers.length > 0
+          ? (this.sweepIndex + sweepBatchSize) % remainingTickers.length
+          : 0;
 
-      const batchSize = 20;
+      // Gom thành danh sách quét duy nhất (khoảng 40-60 coin mỗi chu kỳ)
+      const targetPool = Array.from(
+        new Set([...velocityHotSymbols, ...topGainers, ...topVolume, ...sweepSymbols]),
+      );
+
+      const batchSize = 15;
       for (let i = 0; i < targetPool.length; i += batchSize) {
         const batch = targetPool.slice(i, i + batchSize);
-        await Promise.all(batch.map((item) => this.analyzeSymbol(item.symbol)));
+        await Promise.all(batch.map((item) => this.analyzeSymbol(item)));
       }
     } catch (err: any) {
       this.logger.error(`Lỗi trong chu kỳ quét realtime: ${err.message}`);
@@ -92,24 +126,24 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // PHÂN TÍCH TOKEN: CHỈ BẮT ĐÚNG TRÚNG CHÂN SÓNG TĂNG CỰC KÌ NGON
+  // PHÂN TÍCH TOKEN: PHÁT HIỆN THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY BREAKOUT)
   // =========================================================================
   private async analyzeSymbol(symbol: string) {
-    const klines = await this.binanceService.getKlines(symbol, '1m', 60);
-    if (!klines || klines.length < 35) return;
+    const klines = await this.binanceService.getKlines(symbol, '1m', 35);
+    if (!klines || klines.length < 30) return;
 
     const ticker24h = this.binanceService.getTicker24h(symbol);
     if (!ticker24h) return;
 
     const now = Date.now();
 
-    // BẮT ĐÚNG NGAY CHÂN SÓNG TĂNG (LONG - ĐANG Ở ĐÁY BẮT ĐẦU ĐI LÊN - RỦI RO THẤP ĂN NHIỀU)
+    // BẮT ĐÚNG THỜI ĐIỂM MỚI BẮT ĐẦU SÓNG TĂNG (LONG - CHÂN SÓNG - RỦI RO THẤP ĂN NHIỀU)
     await this.detectFootOfUptrend(symbol, klines, ticker24h, now);
   }
 
   // =========================================================================
-  // THUẬT TOÁN: BẮT ĐÚNG NGAY CHÂN CỦA SÓNG TĂNG (LONG TẠI NỀN ĐÁY)
-  // Tiêu chuẩn khắt khe: Đang ở đáy + Dòng tiền cực mạnh + Biến động nổ + Winrate > 95%
+  // THUẬT TOÁN: BẮT ĐÚNG THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY BREAKOUT)
+  // Tiêu chuẩn: Vừa nhấc chân khỏi nền + Dòng tiền gom bứt phá + Đa khung giờ đồng thuận
   // =========================================================================
   private async detectFootOfUptrend(
     symbol: string,
@@ -118,7 +152,7 @@ export class ScannerService implements OnApplicationBootstrap {
     now: number,
   ): Promise<boolean> {
     const n = klines.length;
-    if (n < 35) return false;
+    if (n < 30) return false;
 
     const currentCandle = klines[n - 1];
     const openPrice = currentCandle.open;
@@ -128,26 +162,11 @@ export class ScannerService implements OnApplicationBootstrap {
 
     if (openPrice <= 0 || currentPrice <= 0) return false;
 
-    // 1. Phải là nến xanh bứt phá dứt khoát
-    const isGreen = currentPrice > openPrice;
-    if (!isGreen) return false;
-
     const candleRange = highPrice - lowPrice;
-    if (candleRange <= 0) return false;
+    const upperWick = highPrice - Math.max(currentPrice, openPrice);
+    const upperWickRatio = candleRange > 0 ? upperWick / candleRange : 0;
 
-    const candleBody = currentPrice - openPrice;
-    const bodyRatio = candleBody / candleRange;
-    const upperWick = highPrice - currentPrice;
-    const upperWickRatio = upperWick / candleRange;
-    const priceChange1mPct = ((currentPrice - openPrice) / openPrice) * 100;
-
-    // YÊU CẦU: BIẾN ĐỘNG MẠNH NGAY TẠI CHÂN SÓNG (tăng dứt khoát 0.60% - 2.2%, không nhích lờ đờ, không fomo ngọn nến)
-    if (priceChange1mPct < 0.60 || priceChange1mPct > 2.2) return false;
-
-    // Cấu trúc nến bứt phá uy lực: thân đặc >= 62%, râu trên <= 12% (phe mua áp đảo hoàn toàn, không bị xả đè đầu)
-    if (bodyRatio < 0.62 || upperWickRatio > 0.12) return false;
-
-    // 2. Kiểm tra nền tích lũy 20 nến trước đó (baseKlines)
+    // 1. Kiểm tra nền tích lũy 20 nến trước đó (baseKlines)
     const baseKlines = klines.slice(n - 22, n - 2);
     if (baseKlines.length < 15) return false;
 
@@ -156,71 +175,77 @@ export class ScannerService implements OnApplicationBootstrap {
     if (baseMinLow <= 0) return false;
 
     const baseRangePct = ((baseMaxHigh - baseMinLow) / baseMinLow) * 100;
-    // Nền phải nén phẳng lì, gom hàng chuẩn chỉ (biên độ dao động <= 2.0%)
-    if (baseRangePct > 2.0) return false;
+    // Nền tích lũy không quá hỗn loạn (biên độ dao động nền <= 5.5%)
+    if (baseRangePct > 5.5) return false;
 
-    // YÊU CẦU: SÓNG MỚI TĂNG (Bứt phá dứt khoát vượt qua đỉnh hộp tích lũy nền)
-    // Giá phải vượt hoặc chạm sát đỉnh nền đi ngang (xác nhận bắt đầu chu kỳ sóng tăng mới)
-    if (currentPrice < baseMaxHigh * 0.998) return false;
-
-    // 3. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG (ĐÁY NỀN):
-    // Đảm bảo BẮT ĐÚNG NGAY CHÂN SÓNG - RỦI RO CỰC THẤP:
-    // Chỉ mới nhấc chân từ 0.40% đến 1.40% tính từ đáy nền gom hàng!
+    // 2. ĐO KHOẢNG CÁCH TỪ CHÂN SÓNG (ĐÁY NỀN):
+    // Đảm bảo BẮT ĐÚNG KHI MỚI BẮT ĐẦU SÓNG (vừa nhấc chân từ 0.40% đến 4.50% tính từ đáy nền gom hàng)
     const distanceFromFootPct = ((currentPrice - baseMinLow) / baseMinLow) * 100;
-    if (distanceFromFootPct < 0.40 || distanceFromFootPct > 1.40) return false;
+    if (distanceFromFootPct < 0.40 || distanceFromFootPct > 4.50) return false;
 
-    // 4. Vị thế đáy 24h & 1h & Thanh khoản thực tế:
-    // Sát 35% đáy thấp nhất 24h & Thanh khoản 24h >= 5 triệu USDT (loại bỏ coin rác kém thanh khoản)
-    if (ticker24h.bottomRangePct > 35) return false;
-    if (ticker24h.quoteVolume < 5_000_000) return false;
+    // 3. SÓNG MỚI TĂNG: Giá phải vượt hoặc chạm sát đỉnh nền đi ngang (bứt phá hộp tích lũy)
+    if (currentPrice < baseMaxHigh * 0.993) return false;
 
-    const kline1hAgo = klines[0];
-    const change1hPct =
-      kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
-    if (change1hPct > 4.0 || change1hPct < -6.0) return false;
+    // 4. KIỂM TRA NẾN BỨT PHÁ (MOMENTUM TRIGGER 1M HOẶC 3M)
+    const priceChange1mPct = ((currentPrice - openPrice) / openPrice) * 100;
+    const price3mAgo = klines[n - 4]?.close || openPrice;
+    const priceChange3mPct = price3mAgo > 0 ? ((currentPrice - price3mAgo) / price3mAgo) * 100 : 0;
 
-    // 5. YÊU CẦU: VOLUME VÀO CỰC KỲ MẠNH (Dòng tiền tổ chức / cá mập bùng nổ chân sóng)
+    // Phải có lực đẩy bứt phá: Nến 1m xanh (+0.40% đến +4.5%) HOẶC 3m tăng liên tiếp (+0.90% đến +6.0%)
+    const isBreakout =
+      (currentPrice > openPrice && priceChange1mPct >= 0.40 && priceChange1mPct <= 4.5) ||
+      (priceChange3mPct >= 0.90 && priceChange3mPct <= 6.0);
+    if (!isBreakout) return false;
+
+    // Nến không bị xả đè đầu quá nặng (râu trên <= 38% chiều dài nến)
+    if (candleRange > 0 && upperWickRatio > 0.38) return false;
+
+    // 5. YÊU CẦU: VOLUME & DÒNG TIỀN VÀO MẠNH (Cá mập kích hoạt sóng)
     const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
     const currentVol1m = currentCandle.quoteVolume;
     const volumeMultiplier = avgBaseVolume > 0 ? currentVol1m / avgBaseVolume : 0;
-    // Khối lượng 1m phải đột biến ít nhất gấp 3.2 lần so với trung bình các nến đi ngang trước đó
-    if (volumeMultiplier < 3.2) return false;
+
+    const last3Klines = klines.slice(n - 3);
+    const vol3m = last3Klines.reduce((s, k) => s + k.quoteVolume, 0);
+    const buyVol3m = last3Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+    const avg3mVol = vol3m / 3;
+    const volumeMultiplier3m = avgBaseVolume > 0 ? avg3mVol / avgBaseVolume : 0;
+
+    // Khối lượng phải có sự đột biến so với nền (gấp >= 1.8x ở 1m hoặc >= 1.5x ở 3m, hoặc vol 1m đạt khủng >= 150k USDT)
+    if (volumeMultiplier < 1.8 && volumeMultiplier3m < 1.5 && currentVol1m < 150_000) return false;
+
+    // Khối lượng tối thiểu 1m >= 35,000 USDT (đảm bảo thanh khoản thật, tránh giật ảo)
+    if (currentVol1m < 35_000) return false;
 
     const takerBuyVol1m = currentCandle.takerBuyQuoteVolume;
     const takerSellVol1m = Math.max(0, currentVol1m - takerBuyVol1m);
     const netCashflow1m = takerBuyVol1m - takerSellVol1m;
     const takerBuyPct1m = currentVol1m > 0 ? (takerBuyVol1m / currentVol1m) * 100 : 50;
-    // Khối lượng mua chủ động 1m >= 130k USDT, dòng tiền ròng 1m >= 100k USDT, Taker Mua >= 80%
-    if (currentVol1m < 160_000 || takerBuyVol1m < 130_000 || takerBuyPct1m < 80 || netCashflow1m < 100_000) {
-      return false;
-    }
 
-    // 3m & 5m & 15m Dòng tiền bồi vào liên tục (Không phải 1 cây nến đơn lẻ rồi tắt)
-    const last3Klines = klines.slice(n - 3);
-    const vol3m = last3Klines.reduce((s, k) => s + k.quoteVolume, 0);
-    const buyVol3m = last3Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
     const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
-    if (takerBuyPct3m < 72 || netCashflow3m < 140_000) return false;
 
+    // Phe mua phải chiếm ưu thế (Taker Buy >= 53% ở 1m hoặc 3m, Net Cashflow dương)
+    if (takerBuyPct1m < 53 && takerBuyPct3m < 53) return false;
+    if (netCashflow1m < 0 && netCashflow3m < 0) return false;
+
+    // Dòng tiền 5m
     const last5Klines = klines.slice(n - 5);
     const vol5m = last5Klines.reduce((s, k) => s + k.quoteVolume, 0);
     const buyVol5m = last5Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
     const netCashflow5m = buyVol5m - (vol5m - buyVol5m);
     const takerBuyPct5m = vol5m > 0 ? (buyVol5m / vol5m) * 100 : 50;
     const greenCandles5m = last5Klines.filter((k) => k.close >= k.open).length;
-    if (takerBuyPct5m < 68 || netCashflow5m < 200_000 || greenCandles5m < 3) return false;
 
     // =========================================================================
-    // XÁC MINH HỘI TỤ CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ: 15M VÀ 1H
-    // "Chân là tất cả các chân: chân phút, chân 15p, chân 1h, chân tất cả các khung giờ"
+    // XÁC MINH HỘI TỤ ĐA KHUNG GIỜ: 15M VÀ 1H
     // =========================================================================
     const [klines15m, klines1h] = await Promise.all([
-      this.binanceService.getKlines(symbol, '15m', 20),
+      this.binanceService.getKlines(symbol, '15m', 15),
       this.binanceService.getKlines(symbol, '1h', 24),
     ]);
 
-    if (!klines15m || klines15m.length < 10 || !klines1h || klines1h.length < 10) {
+    if (!klines15m || klines15m.length < 5 || !klines1h || klines1h.length < 5) {
       return false;
     }
 
@@ -233,11 +258,17 @@ export class ScannerService implements OnApplicationBootstrap {
     const foot15mPct = range15m > 0 ? ((currentPrice - baseLow15m) / range15m) * 100 : 50;
     const distanceFromFoot15mPct = baseLow15m > 0 ? ((currentPrice - baseLow15m) / baseLow15m) * 100 : 0;
 
-    // Yêu cầu: Khung 15m PHẢI NẰM Ở VÙNG ĐÁY CHÂN SÓNG (cách đáy 15m <= 2.8% và vị trí <= 45% range 15m)
-    if (foot15mPct > 45 || distanceFromFoot15mPct > 2.8) {
-      this.logger.debug(
-        `[${symbol}] Loại bỏ: Không thỏa mãn chân sóng khung 15m (foot15m=${foot15mPct.toFixed(1)}%, dist=${distanceFromFoot15mPct.toFixed(2)}%)`,
-      );
+    // Khung 15m: Cách đáy 15m <= 6.8% (đang ở đầu sóng 15m, không fomo đỉnh nến 15m)
+    if (distanceFromFoot15mPct > 6.8) {
+      return false;
+    }
+
+    const last3Klines15m = klines15m.slice(-3);
+    const vol15mTotal = last3Klines15m.reduce((s, k) => s + k.quoteVolume, 0);
+    const buy15mTotal = last3Klines15m.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+    const netCashflow15m = buy15mTotal - (vol15mTotal - buy15mTotal);
+    const takerBuyPct15m = vol15mTotal > 0 ? (buy15mTotal / vol15mTotal) * 100 : 50;
+    if (takerBuyPct15m < 45) {
       return false;
     }
 
@@ -249,55 +280,43 @@ export class ScannerService implements OnApplicationBootstrap {
     const range1h = maxHigh1h - baseLow1h;
     const foot1hPct = range1h > 0 ? ((currentPrice - baseLow1h) / range1h) * 100 : 50;
 
-    // Yêu cầu: Khung 1h PHẢI NẰM Ở VÙNG ĐÁY CHÂN SÓNG (<= 40% range 1h)
-    if (foot1hPct > 40) {
-      this.logger.debug(
-        `[${symbol}] Loại bỏ: Không thỏa mãn chân sóng khung 1h (foot1h=${foot1hPct.toFixed(1)}%)`,
-      );
+    const kline1hAgo = klines1h[klines1h.length - 2] || klines1h[0];
+    const change1hPct =
+      kline1hAgo && kline1hAgo.close > 0 ? ((currentPrice - kline1hAgo.close) / kline1hAgo.close) * 100 : 0;
+    if (change1hPct < -12.0) {
       return false;
     }
 
-    // Dòng tiền 15m thực tế
-    const last3Klines15m = klines15m.slice(-3);
-    const vol15mTotal = last3Klines15m.reduce((s, k) => s + k.quoteVolume, 0);
-    const buy15mTotal = last3Klines15m.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
-    const netCashflow15m = buy15mTotal - (vol15mTotal - buy15mTotal);
-    const takerBuyPct15m = vol15mTotal > 0 ? (buy15mTotal / vol15mTotal) * 100 : 50;
-    if (takerBuyPct15m < 55 || netCashflow15m < 0) {
-      return false;
-    }
+    // Tính điểm đánh giá (Score) đảm bảo WINRATE cao
+    let score = 72;
+    if (distanceFromFootPct <= 1.8) score += 10;
+    else if (distanceFromFootPct <= 3.0) score += 6;
 
-    // Tính điểm đánh giá (Score) đảm bảo ĂN CHẮC WINRATE > 95%
-    let score = 70;
-    if (ticker24h.bottomRangePct <= 20) score += 10;
-    else if (ticker24h.bottomRangePct <= 30) score += 6;
+    if (volumeMultiplier >= 3.0 || volumeMultiplier3m >= 2.5) score += 10;
+    else if (volumeMultiplier >= 2.0 || volumeMultiplier3m >= 1.8) score += 6;
 
-    if (foot1hPct <= 25 && foot15mPct <= 30) score += 10; // Đáy sâu đa khung 1h và 15m
-    else score += 5;
+    if (takerBuyPct1m >= 68 || takerBuyPct3m >= 68) score += 10;
+    else if (takerBuyPct1m >= 58 || takerBuyPct3m >= 58) score += 6;
 
-    if (distanceFromFootPct <= 0.85) score += 10; // Rất sát chân sóng 1m
-    else score += 5;
+    if (distanceFromFoot15mPct <= 3.8) score += 8;
+    else score += 4;
 
-    if (takerBuyPct1m >= 85 && takerBuyPct5m >= 75) score += 10;
-    else if (takerBuyPct1m >= 80) score += 6;
-
-    if (netCashflow5m >= 300_000) score += 10;
-    else score += 5;
-
-    if (bodyRatio >= 0.7 && upperWickRatio <= 0.1) score += 8;
+    if (ticker24h.priceChangePercent <= 15.0 && ticker24h.priceChangePercent >= -10.0) score += 5;
 
     const forecastScore = Math.min(99, Math.round(score));
-    // CHỈ THÔNG BÁO LỆNH CỰC KÌ NGON ĂN CHẮC WINRATE >= 90%
-    if (forecastScore < 90) return false;
+    if (forecastScore < 78) return false;
 
-    // BẢO ĐẢM RỦI RO CỰC THẤP: Khoảng cách cắt lỗ SL phải <= 1.35%
-    const suggestedSl = baseMinLow * 0.996; // Cắt lỗ ngay dưới đáy nền tích lũy
-    const riskDistancePct = ((currentPrice - suggestedSl) / currentPrice) * 100;
-    if (riskDistancePct > 1.35) return false; // Nếu khoảng cách cắt lỗ > 1.35% -> Quá rủi ro, BỎ QUA!
+    // Cắt lỗ an toàn dưới đáy nền tích lũy, khống chế rủi ro an toàn
+    let suggestedSl = baseMinLow * 0.995;
+    let riskDistancePct = ((currentPrice - suggestedSl) / currentPrice) * 100;
+    if (riskDistancePct > 2.8) {
+      suggestedSl = currentPrice * 0.975; // Khống chế SL an toàn tối đa -2.5%
+      riskDistancePct = 2.5;
+    }
 
     const lastAlert = this.symbolCooldowns.get(symbol) || 0;
     if (now - lastAlert < 15 * 60 * 1000) return false;
-    if (now - this.lastGlobalAlertTime < 5000) return false;
+    if (now - this.lastGlobalAlertTime < 3000) return false;
 
     this.symbolCooldowns.set(symbol, now);
     this.lastGlobalAlertTime = now;
@@ -321,7 +340,7 @@ export class ScannerService implements OnApplicationBootstrap {
     const price5mAgo = klines[n - 6]?.close || klines[0].close;
     const priceChange5mPct = price5mAgo > 0 ? ((currentPrice - price5mAgo) / price5mAgo) * 100 : 0;
 
-    const status1hText = `Tích lũy cạn cung sát đáy 1h, lực bán cạn kiệt`;
+    const status1hText = `Tích lũy cạn cung, cấu trúc nâng đáy khung 1h`;
     const status15mText = `Bứt phá thoát đáy 15m, nến 15m nén chặt bật tăng`;
 
     const payload: VipSpikeAlertPayload = {
@@ -359,16 +378,16 @@ export class ScannerService implements OnApplicationBootstrap {
       priceChange5mPct,
       greenCandles5m,
       forecastScore,
-      estimatedWinRate: 95,
+      estimatedWinRate: forecastScore,
       entryPrice: currentPrice,
       suggestedTp1,
       suggestedTp2,
       suggestedSl,
       rewardRiskRatio: 3.2 / riskDistancePct,
-      analysisReason: `ĐỒNG THUẬN CHÂN SÓNG TẤT CẢ CÁC KHUNG GIỜ (1M, 5M, 15M, 1H, 24H): Sát đáy 24h (${ticker24h.bottomRangePct.toFixed(1)}%), sát đáy 1h (${foot1hPct.toFixed(1)}%), thoát đáy 15m (+${distanceFromFoot15mPct.toFixed(2)}%), nổ volume 1m (+${priceChange1mPct.toFixed(2)}%), SL cực sát đáy nền chỉ -${riskDistancePct.toFixed(2)}%.`,
+      analysisReason: `PHÁT HIỆN BẮT ĐẦU SÓNG TĂNG: Vừa nhấc chân +${distanceFromFootPct.toFixed(2)}% từ đáy nền $${baseMinLow}, volume nổ ${volumeMultiplier.toFixed(1)}x, phe Mua áp đảo (Taker ${takerBuyPct1m.toFixed(1)}%), SL an toàn -${riskDistancePct.toFixed(2)}%.`,
     };
 
-    this.logger.warn(`👑 [LỆNH CỰC KÌ NGON: BẮT NGAY CHÂN SÓNG TĂNG] ${symbol} -> Điểm: ${forecastScore}/100 | SL: -${riskDistancePct.toFixed(2)}%`);
+    this.logger.warn(`👑 [BẮT ĐẦU SÓNG TĂNG] ${symbol} -> Điểm: ${forecastScore}/100 | SL: -${riskDistancePct.toFixed(2)}% | Entry: ${currentPrice}`);
     await this.telegramService.sendVipSpikeAlert(payload);
     return true;
   }
