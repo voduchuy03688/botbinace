@@ -52,6 +52,21 @@ export class ScannerService implements OnApplicationBootstrap {
     await this.binanceService.refreshTickers24h();
   }
 
+  // Gửi Báo cáo Dòng Tiền Định Kỳ 2 lần mỗi ngày (vào lúc 00:00 và 12:00)
+  @Cron('0 0 0,12 * * *')
+  async handleScheduledCashflowReport() {
+    this.logger.log('Đang khởi tạo báo cáo dòng tiền định kỳ thị trường (12h/00h)...');
+    try {
+      await this.binanceService.refreshTickers24h();
+      const report = await this.binanceService.getCashflowReport();
+      await this.telegramService.sendCashflowReportAlert(report);
+      this.logger.log('Đã gửi báo cáo dòng tiền thành công tới Telegram!');
+    } catch (err: any) {
+      this.logger.error(`Lỗi khi tạo báo cáo dòng tiền: ${err.message}`);
+    }
+  }
+
+
   // =========================================================================
   // QUÉT REALTIME TỐC ĐỘ CAO (5 GIÂY/LẦN)
   // Bắt tức thì biến động 1s/5s và phút khi dòng tiền cá mập vừa bơm vào
@@ -384,10 +399,10 @@ export class ScannerService implements OnApplicationBootstrap {
       }
 
       const forecastScore = Math.min(99, Math.round(score));
-      if (forecastScore < 90) return false;
+      if (forecastScore < 95) return false; // Chỉ bắn thông báo Realtime tức thì cho kèo CỰC NGON (Score >= 95)
 
-      const signalTier: 'CUC_NGON' | 'NGON' = forecastScore >= 95 ? 'CUC_NGON' : 'NGON';
-      const estimatedWinRate = signalTier === 'CUC_NGON' ? 95 : 90;
+      const signalTier: 'CUC_NGON' = 'CUC_NGON';
+      const estimatedWinRate = 95;
 
       // Cắt lỗ an toàn dưới đáy nền tích lũy, khống chế rủi ro an toàn
       let suggestedSl = baseMinLow * 0.995;
@@ -431,7 +446,7 @@ export class ScannerService implements OnApplicationBootstrap {
           ? `Biến động 5s: +${velocityData.velocityPct.toFixed(2)}% (Bơm ròng: +${Math.round(velocityData.volInflow).toLocaleString()} USDT), `
           : '';
 
-      const tierName = signalTier === 'CUC_NGON' ? '💎 KÈO CỰC NGON (Winrate 95%+)' : '🟢 KÈO NGON (Winrate 90%)';
+      const tierName = '💎 KÈO CỰC NGON (Winrate 95%+)';
       const payload: VipSpikeAlertPayload = {
         signalTier,
         cashflowPatternText,
@@ -489,6 +504,7 @@ export class ScannerService implements OnApplicationBootstrap {
 
     return false;
   }
+
 
   // =========================================================================
   // QUẢN LÝ VỊ THẾ TỰ ĐỘNG & BÁO CHỐT LỜI / THOÁT LỆNH (DUY NHẤT 1 LẦN)

@@ -172,82 +172,33 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO CỰC KÌ NGON: BẮT ĐÚNG CHÂN SÓNG ĐA KHUNG GIỜ (RỦI RO THẤP - ĂN NHIỀU)
-  // Xác nhận đồng thuận chân sóng ở TẤT CẢ CÁC KHUNG: 1m, 5m, 15m, 1h, 24h
+  // THÔNG BÁO TÍN HIỆU REALTIME (NGẮN GỌN - ĐỦ THÔNG TIN CẦN THIẾT)
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const footDistanceText =
-      payload.distanceFromFootPct !== undefined
-        ? `+${payload.distanceFromFootPct.toFixed(2)}%`
-        : `+${payload.priceChangePct.toFixed(2)}%`;
-    const baseLowText =
-      payload.baseMinLow !== undefined ? `$${payload.baseMinLow}` : `$${payload.lowPrice}`;
-    const riskDistance =
-      payload.suggestedSl && payload.entryPrice > 0
-        ? (((payload.entryPrice - payload.suggestedSl) / payload.entryPrice) * 100).toFixed(2)
-        : '1.20';
-
-    const isCucNgon = payload.signalTier === 'CUC_NGON' || payload.forecastScore >= 95;
-    const tierTitle = isCucNgon
-      ? '💎 🚀 🌊 <b>[TÍN HIỆU CỰC NGON: DÒNG TIỀN BƠM CỰC MẠNH - WINRATE 95%+]</b>'
-      : '🟢 ⚡ 🌊 <b>[TÍN HIỆU NGON: DÒNG TIỀN BƠM MẠNH - WINRATE 90%+]</b>';
-    const subTitle = isCucNgon
-      ? '🔥 <b>CÁ MẬP ĐANG BƠM TIỀN DỒN DẬP - NẾN ĐANG BAY - VÀO LỆNH NGAY!</b>'
-      : '🔥 <b>DÒNG TIỀN VÀO MẠNH ĐỀU - VỪA BỨT PHÁ CHÂN SÓNG!</b>';
-    const qualityText = isCucNgon
-      ? `🎯 <b>CHẤT LƯỢNG TÍN HIỆU:</b> <b>💎 CỰC NGON (Winrate: 95%+)</b> | Điểm xung lực: <b>${payload.forecastScore}/100</b>`
-      : `🎯 <b>CHẤT LƯỢNG TÍN HIỆU:</b> <b>🟢 NGON (Winrate: 90%)</b> | Điểm xung lực: <b>${payload.forecastScore}/100</b>`;
+    const vol1mStr = payload.volume1m >= 1_000_000
+      ? `${(payload.volume1m / 1_000_000).toFixed(2)}M`
+      : `${Math.round(payload.volume1m / 1000)}k`;
+    const net1mStr = payload.netCashflow1m >= 1_000_000
+      ? `+${(payload.netCashflow1m / 1_000_000).toFixed(2)}M`
+      : `+${Math.round(payload.netCashflow1m / 1000)}k`;
+    const change1mStr = `${payload.priceChangePct >= 0 ? '+' : ''}${payload.priceChangePct.toFixed(2)}%`;
+    const change24hStr = `${payload.change24hPct >= 0 ? '+' : ''}${payload.change24hPct.toFixed(1)}%`;
 
     const lines: string[] = [
-      tierTitle,
-      subTitle,
-      '⚡ <b>CHUẨN CHÂN SÓNG - KHÔNG ĐU ĐỈNH - VÀO LỆNH NGAY KẺO LỠ!</b>',
-      '----------------------------------------',
-      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      qualityText,
-      ...(payload.cashflowPatternText
-        ? [
-            `• <b>Dấu Ấn Dòng Tiền:</b> ${payload.cashflowPatternText}`,
-          ]
-        : []),
-      '----------------------------------------',
-      '⚡ <b>BIẾN ĐỘNG DÒNG TIỀN BƠM MẠNH (GIÂY & PHÚT):</b>',
-      ...(payload.secondVelocityPct !== undefined && payload.secondVelocityPct > 0
-        ? [
-            `• <b>Biến Động Tức Thì (5 Giây):</b> <b>+${payload.secondVelocityPct.toFixed(2)}%</b> 🚀 (Dòng tiền bơm dồn dập)${
-              payload.secondVolInflow ? ` | Bơm ròng: <code>+${Math.round(payload.secondVolInflow).toLocaleString()} USDT</code>` : ''
-            }`,
-          ]
-        : []),
-      `• <b>Biến Động 1 Phút (1m):</b> <b>+${payload.priceChangePct.toFixed(2)}%</b> (Đang bay bứt phá)`,
-      `• <b>Biến Động 5 Phút (5m):</b> <b>${payload.priceChange5mPct >= 0 ? '+' : ''}${payload.priceChange5mPct.toFixed(2)}%</b> (${payload.greenCandles5m}/5 nến xanh)`,
-      '----------------------------------------',
-      '🌊 <b>KHỐI LƯỢNG BƠM RÒNG CỰC LỚN (CÁ MẬP VÀO HÀNG):</b>',
-      `• <b>Khối Lượng 1 Phút:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
-      `• <b>Phe Mua Áp Đảo (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net bơm 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
-      `• <b>Dòng Tiền Đa Khung (Net Gom):</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code>`,
-      '----------------------------------------',
-      '🌱 <b>VỊ THẾ CHÂN SÓNG (CHUẨN BỊ BAY - RỦI RO CỰC THẤP):</b>',
-      `• <b>Vị Trí Chân Sóng:</b> Vừa nhấc chân <code>${footDistanceText}</code> khỏi nền đáy (Đáy gom: <code>${baseLowText}</code>)`,
-      `• <b>Khung 15m:</b> ${payload.status15mText} (Cách đáy 15m: <code>+${payload.distanceFromFoot15mPct.toFixed(2)}%</code>)`,
-      `• <b>Khung 1h:</b> ${payload.status1hText} (1h: <code>${payload.change1hPct >= 0 ? '+' : ''}${payload.change1hPct.toFixed(2)}%</code>)`,
-      '----------------------------------------',
-      '🎯 <b>KẾ HOẠCH VÀO LỆNH (CHUẨN BỊ BAY):</b>',
-      `• <b>Vào Lệnh Ngay (Entry):</b> <code>$${payload.entryPrice}</code>`,
-      `• <b>Chốt Lời TP1 (+3.2%):</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (Chốt 50%, dời SL hòa vốn)`,
-      `• <b>Chốt Lời TP2 (+6.5%):</b> <code>$${payload.suggestedTp2.toFixed(4)}</code> (Ăn trọn con sóng lớn)`,
-      `• <b>Cắt Lỗ SL Sát Nền:</b> <code>$${payload.suggestedSl.toFixed(4)}</code> (Rủi ro chỉ <b>-${riskDistance}%</b>, ngay dưới đáy nền)`,
-      `• <b>Tỷ Lệ Risk/Reward:</b> <b>${payload.rewardRiskRatio.toFixed(1)}:1</b>`,
-      '----------------------------------------',
-      `💡 <i>Phân tích: ${payload.analysisReason}</i>`,
-      '----------------------------------------',
-      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Mở Vị Thế LONG Trên Binance Futures Ngay</a>`,
+      `💎 🚀 <b>[KÈO CỰC NGON]</b> <code>${payload.symbol}</code>`,
+      `• <b>Giá hiện tại:</b> <code>$${payload.currentPrice}</code>`,
+      `• <b>Tăng giá:</b> 1m: <b>${change1mStr}</b> | 24h: <b>${change24hStr}</b>`,
+      `• <b>Dòng tiền vào:</b> 1m Vol: <b>${vol1mStr} USDT</b> (Nổ <b>${payload.volumeMultiplier.toFixed(1)}x</b> | Mua ròng: <code>${net1mStr} USDT</code> | Taker Mua: <b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
+      `• <b>Vị thế chân sóng:</b> Mới nhấc <b>+${(payload.distanceFromFootPct || 0).toFixed(2)}%</b> từ nền đáy $${payload.baseMinLow || payload.lowPrice}`,
+      `----------------------------------------`,
+      `🎯 <b>Lệnh:</b> Entry <code>$${payload.entryPrice}</code> | TP1: <code>$${payload.suggestedTp1.toFixed(4)}</code> | TP2: <code>$${payload.suggestedTp2.toFixed(4)}</code> | SL: <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+      `🔗 <a href="${binanceUrl}">LONG Ngay Trên Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
+
 
   // =========================================================================
   // THÔNG BÁO CHỐT LỜI TP1 / TP2
@@ -330,4 +281,68 @@ export class TelegramService {
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));
   }
+
+  // =========================================================================
+  // THÔNG BÁO BÁO CÁO DÒNG TIỀN VÀO, DÒNG TIỀN RA & COIN LỰC MUA MẠNH KHUNG 1D (GỬI LÚC 00:00 VÀ 12:00)
+  // =========================================================================
+  async sendCashflowReportAlert(data: {
+    inflow: Array<{ symbol: string; netInflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerBuyPct: number }>;
+    outflow: Array<{ symbol: string; netOutflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerSellPct: number }>;
+    strongDailyBuys?: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
+  }): Promise<boolean> {
+    const timeString = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+
+    const lines: string[] = [
+      '📊 🌊 <b>[BÁO CÁO DÒNG TIỀN & LỰC MUA MẠNH KHUNG 1D BINANCE FUTURES]</b>',
+      `⏰ <b>Thời gian:</b> <i>${timeString}</i>`,
+      '----------------------------------------',
+      '🟢 <b>TOP 15 COIN DÒNG TIỀN VÀO MẠNH NHẤT (NET INFLOW):</b>',
+    ];
+
+    if (data.inflow.length === 0) {
+      lines.push('<i>Khởi tạo chưa ghi nhận coin đạt tiêu chuẩn dòng tiền vào.</i>');
+    } else {
+      data.inflow.forEach((item, idx) => {
+        const netStr = `+${Math.round(item.netInflowUsdt / 1000).toLocaleString()}k USDT`;
+        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
+        lines.push(
+          `${idx + 1}. <b>${item.symbol}</b> | Mua ròng: <code>${netStr}</code> | 24h: <b>${changeStr}</b> | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`,
+        );
+      });
+    }
+
+    lines.push('----------------------------------------');
+    lines.push('🔴 <b>TOP 15 COIN DÒNG TIỀN RA MẠNH NHẤT (NET OUTFLOW):</b>');
+
+    if (data.outflow.length === 0) {
+      lines.push('<i>Khởi tạo chưa ghi nhận coin đạt tiêu chuẩn dòng tiền ra.</i>');
+    } else {
+      data.outflow.forEach((item, idx) => {
+        const netStr = `-${Math.round(item.netOutflowUsdt / 1000).toLocaleString()}k USDT`;
+        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
+        lines.push(
+          `${idx + 1}. <b>${item.symbol}</b> | Bán ròng: <code>${netStr}</code> | 24h: <b>${changeStr}</b> | Sell: <b>${item.takerSellPct.toFixed(0)}%</b>`,
+        );
+      });
+    }
+
+    if (data.strongDailyBuys && data.strongDailyBuys.length > 0) {
+      lines.push('----------------------------------------');
+      lines.push('🚀 🚀 <b>TOP COIN CÓ LỰC MUA MẠNH TRONG NẾN 1 NGÀY (KHUNG 1D):</b>');
+      data.strongDailyBuys.forEach((item, idx) => {
+        const buyVolStr = `${Math.round(item.takerBuyUsdt / 1_000_000).toFixed(1)}M USDT`;
+        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
+        lines.push(
+          `${idx + 1}. <b>${item.symbol}</b> | Mua 1D: <code>${buyVolStr}</code> | 24h: <b>${changeStr}</b> | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`,
+        );
+      });
+    }
+
+    lines.push('----------------------------------------');
+    lines.push('💡 <i>Tự động cập nhật 2 lần/ngày (lúc 12:00 và 00:00).</i>');
+
+    return this.sendMessage(lines.join('\n'));
+  }
 }
+
+
