@@ -70,6 +70,7 @@ export interface HetNgonAlertPayload {
   symbol: string;
   entryPrice: number;
   currentPrice: number;
+  highestPrice?: number;
   profitPct: number;
   candlesAnalyzed: number;
   takerSellPct: number;
@@ -184,14 +185,14 @@ export class TelegramService {
         : '1.20';
 
     const lines: string[] = [
-      '🌊 🚀 💎 <b>[CẢNH BÁO: DÒNG TIỀN CỰC MẠNH VÀO CHÂN SÓNG BAY]</b>',
-      '🔥 <b>DÒNG TIỀN CÁ MẬP ĐỔ VÀO CỰC LỚN - VỪA NHẤC CHÂN KHỎI NỀN!</b>',
+      '🌊 🚀 💎 <b>[CẢNH BÁO DÒNG TIỀN BƠM MẠNH: TÍN HIỆU CỰC NGON > 90%]</b>',
+      '🔥 <b>DÒNG TIỀN CÁ MẬP BƠM VÀO CỰC LỚN - VỪA NHẤC CHÂN KHỎI NỀN!</b>',
       '⚡ <b>CHUẨN CHÂN SÓNG - KHÔNG ĐU ĐỈNH - VÀO LỆNH NGAY KẺO LỠ!</b>',
       '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `🎯 <b>ĐỘ MẠNH DÒNG TIỀN & XUNG LỰC:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
+      `🎯 <b>ĐỘ CỰC NGON & TỶ LỆ THẮNG:</b> <b>${payload.forecastScore}/100</b> (Độ chuẩn xác: <b>${payload.estimatedWinRate}%+</b>)`,
       '----------------------------------------',
-      '⚡ <b>BIẾN ĐỘNG TỨC THÌ (GIÂY & PHÚT):</b>',
+      '⚡ <b>BIẾN ĐỘNG DÒNG TIỀN BƠM MẠNH (GIÂY & PHÚT):</b>',
       ...(payload.secondVelocityPct !== undefined && payload.secondVelocityPct > 0
         ? [
             `• <b>Biến Động Tức Thì (5 Giây):</b> <b>+${payload.secondVelocityPct.toFixed(2)}%</b> 🚀 (Giật giá kích nổ sóng)${
@@ -202,9 +203,9 @@ export class TelegramService {
       `• <b>Biến Động 1 Phút (1m):</b> <b>+${payload.priceChangePct.toFixed(2)}%</b> (Bứt phá dứt khoát)`,
       `• <b>Biến Động 5 Phút (5m):</b> <b>${payload.priceChange5mPct >= 0 ? '+' : ''}${payload.priceChange5mPct.toFixed(2)}%</b> (${payload.greenCandles5m}/5 nến xanh)`,
       '----------------------------------------',
-      '🌊 <b>DÒNG TIỀN MUA GOM CỰC MẠNH (CÁ MẬP BƠM TIỀN):</b>',
+      '🌊 <b>KHỐI LƯỢNG BƠM RÒNG CỰC LỚN (CÁ MẬP VÀO HÀNG):</b>',
       `• <b>Khối Lượng 1 Phút:</b> <code>${Math.round(payload.volume1m).toLocaleString()} USDT</code> (Đột biến <b>${payload.volumeMultiplier.toFixed(1)}x</b> lần nền)`,
-      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net gom 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
+      `• <b>Lực Mua Chủ Động (Taker Buy):</b> <b>${payload.takerBuyPct1m.toFixed(1)}%</b> (Net bơm 1m: <code>+${Math.round(payload.netCashflow1m).toLocaleString()} USDT</code>)`,
       `• <b>Dòng Tiền Đa Khung (Net Gom):</b> Net 3m: <code>+${Math.round(payload.netCashflow3m).toLocaleString()} USDT</code> | Net 5m: <code>+${Math.round(payload.netCashflow5m).toLocaleString()} USDT</code>`,
       '----------------------------------------',
       '🌱 <b>VỊ THẾ CHÂN SÓNG (CHUẨN BỊ BAY - RỦI RO CỰC THẤP):</b>',
@@ -272,25 +273,31 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO THOÁT LỆNH KHẨN CẤP (CHỈ KHI CÁ MẬP XẢ THẬT SỰ KHỦNG KHIẾP)
+  // THÔNG BÁO CẢNH BÁO: HẾT CỰC NGON - THOÁT LỆNH NGAY
   // =========================================================================
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
+    const highestText = payload.highestPrice ? ` (Đỉnh đạt: <code>$${payload.highestPrice}</code>)` : '';
+    const dropText = payload.dropFromPeakPct > 0 ? ` | Tụt từ đỉnh: <b>-${payload.dropFromPeakPct.toFixed(2)}%</b>` : '';
 
     const lines: string[] = [
-      '🔴 🛑 <b>[THÔNG BÁO DUY NHẤT: THOÁT LỆNH BẢO TOÀN VỐN]</b>',
+      '🛑 ⚠️ ⚡ <b>[CẢNH BÁO: HẾT CỰC NGON - THOÁT LỆNH NGAY]</b>',
+      '🔻 <b>DÒNG TIỀN BƠM VÀO ĐÃ SUY YẾU / XUẤT HIỆN LỰC XẢ CỦA CÁ MẬP!</b>',
+      '👉 <b>HÀNH ĐỘNG KHUYẾN NGHỊ: ĐÓNG TOÀN BỘ VỊ THẾ BẢO TOÀN LÃI / VỐN!</b>',
+      '----------------------------------------',
       `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `• <b>Giá Vào:</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Hiện Tại:</b> <code>$${payload.currentPrice}</code> (<code>${payload.profitPct >= 0 ? '+' : ''}${payload.profitPct.toFixed(2)}%</code>)`,
+      `• <b>Giá Vào (Entry):</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Thoát:</b> <code>$${payload.currentPrice}</code>`,
+      `• <b>Hiệu Suất Vị Thế:</b> <b>${payload.profitPct >= 0 ? '+' : ''}${payload.profitPct.toFixed(2)}%</b>${highestText}${dropText}`,
       '----------------------------------------',
-      `• <b>Lực Bán Chủ Động Taker:</b> <b>${payload.takerSellPct.toFixed(1)}%</b>`,
-      `• <b>Dòng Tiền Ròng Bị Rút:</b> <code>-${Math.round(Math.abs(payload.netCashflowSell)).toLocaleString()} USDT</code>`,
+      '🌊 <b>DẤU HIỆU DÒNG TIỀN ĐẢO CHIỀU:</b>',
+      `• <b>Lực Bán Chủ Động (Taker Sell):</b> <b>${payload.takerSellPct.toFixed(1)}%</b>`,
+      `• <b>Dòng Tiền Bị Rút Ròng:</b> <code>-${Math.round(Math.abs(payload.netCashflowSell)).toLocaleString()} USDT</code>`,
       '----------------------------------------',
-      `💡 <b>Lý do:</b> <i>${payload.reasonText}</i>`,
-      '👉 <b>HÀNH ĐỘNG DUY NHẤT:</b> <b>ĐÓNG LỆNH NGAY / BẢO TOÀN VỐN!</b>',
-      '⚠️ <i>Lưu ý: Bot chỉ thông báo DUY NHẤT 1 LẦN cho coin này và dừng theo dõi hoàn toàn.</i>',
+      `💡 <b>Lý do cảnh báo:</b> <i>${payload.reasonText}</i>`,
       '----------------------------------------',
+      '⚠️ <i>Lưu ý: Tín hiệu CỰC NGON của coin này đã kết thúc, bot dừng theo dõi để tìm kèo chân sóng mới.</i>',
       `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Kiểm Tra Vị Thế Binance Futures</a>`,
+      `🔗 <a href="${binanceUrl}">Đóng Vị Thế Trên Binance Futures Ngay</a>`,
     ];
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));

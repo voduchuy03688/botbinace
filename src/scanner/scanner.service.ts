@@ -300,27 +300,29 @@ export class ScannerService implements OnApplicationBootstrap {
         return false;
       }
 
-      // Tính điểm đánh giá (Score) đảm bảo xung lực dòng tiền mạnh
-      let score = 75;
-      if (distanceFromFootPct <= 1.5) score += 10;
-      else if (distanceFromFootPct <= 2.5) score += 6;
+      // Tính điểm đánh giá (Score) đảm bảo dòng tiền bơm mạnh đạt chuẩn CỰC NGON > 90%
+      let score = 55;
+      if (distanceFromFootPct <= 1.8) score += 10;
+      else if (distanceFromFootPct <= 2.8) score += 6;
 
-      if (volumeMultiplier >= 3.0 || volumeMultiplier3m >= 2.5) score += 10;
-      else if (volumeMultiplier >= 2.0) score += 6;
+      if (volumeMultiplier >= 3.0 || volumeMultiplier3m >= 2.5) score += 12;
+      else if (volumeMultiplier >= 2.0) score += 7;
 
-      if (takerBuyPct1m >= 70 || takerBuyPct3m >= 70) score += 10;
-      else if (takerBuyPct1m >= 60 || takerBuyPct3m >= 60) score += 6;
+      if (takerBuyPct1m >= 70 || takerBuyPct3m >= 70) score += 12;
+      else if (takerBuyPct1m >= 60 || takerBuyPct3m >= 60) score += 7;
 
-      if (netCashflow1m >= 80_000 || netCashflow3m >= 150_000) score += 10;
-      else if (netCashflow1m >= 30_000 || netCashflow3m >= 60_000) score += 5;
+      if (netCashflow1m >= 80_000 || netCashflow3m >= 150_000) score += 12;
+      else if (netCashflow1m >= 30_000 || netCashflow3m >= 60_000) score += 7;
 
-      if (distanceFromFoot15mPct <= 4.0) score += 8;
+      if (distanceFromFoot15mPct <= 4.5) score += 8;
       else score += 4;
 
       if (ticker24h.priceChangePercent <= 25.0 && ticker24h.priceChangePercent >= -10.0) score += 5;
 
+      if (velocityData && (velocityData.velocityPct >= 0.15 || velocityData.volInflow >= 10_000)) score += 6;
+
       const forecastScore = Math.min(99, Math.round(score));
-      if (forecastScore < 80) return false;
+      if (forecastScore < 90) return false;
 
       // Cắt lỗ an toàn dưới đáy nền tích lũy, khống chế rủi ro an toàn
       let suggestedSl = baseMinLow * 0.995;
@@ -471,7 +473,7 @@ export class ScannerService implements OnApplicationBootstrap {
         });
       }
 
-      // 3. Phân tích quản lý vị thế: Chỉ thoát khi chạm SL hoặc cá mập xả tháo cực lớn
+      // 3. Phân tích quản lý vị thế & CẢNH BÁO HẾT CỰC NGON
       const recentKlines = await this.binanceService.getKlines(symbol, '1m', 10);
       if (!recentKlines || recentKlines.length < 5) continue;
 
@@ -482,35 +484,42 @@ export class ScannerService implements OnApplicationBootstrap {
       const takerSellPct5 = totalVol5 > 0 ? (totalSell5 / totalVol5) * 100 : 50;
       const netCashflowSell = totalSell5 - totalBuy5;
 
+      const dropFromPeakPct = pos.highestPrice > 0 ? ((pos.highestPrice - currentPrice) / pos.highestPrice) * 100 : 0;
+
       let isHetNgon = false;
       let hetNgonReason = '';
 
-      // 1. Chạm Stop Loss an toàn ngay dưới đáy nền (rủi ro cực thấp <= 1.35%)
+      // 1. Chạm Stop Loss an toàn ngay dưới đáy nền
       if (currentPrice <= pos.slPrice) {
         isHetNgon = true;
         hetNgonReason = pos.tp1Hit
-          ? `Giá điều chỉnh chạm mức hòa vốn Entry ($${pos.entryPrice}) sau khi đã chốt 50% TP1 (+3.2%). Lệnh đã hoàn tất an toàn có lãi.`
-          : `Giá chạm ngưỡng dừng lỗ an toàn sát đáy nền ($${pos.slPrice.toFixed(4)}). Cắt lỗ bảo toàn vốn theo đúng quy chuẩn rủi ro cực thấp.`;
+          ? `Giá điều chỉnh chạm mức hòa vốn Entry ($${pos.entryPrice}) sau khi đã chốt 50% TP1 (+3.2%). Lệnh hoàn tất an toàn.`
+          : `Giá chạm ngưỡng dừng lỗ an toàn sát đáy nền ($${pos.slPrice.toFixed(4)}). Cắt lỗ bảo toàn vốn theo đúng quy chuẩn rủi ro thấp.`;
       }
-      // 2. Thoát lệnh khẩn cấp CHỈ KHI có xả tháo đột biến cực lớn từ cá mập (> 350,000 USDT)
-      // Tuyệt đối không thoát sớm trong 5 phút đầu do biến động retest thông thường
-      else if (currentPrice < pos.entryPrice * 0.992 && takerSellPct5 >= 80 && netCashflowSell >= 350_000) {
+      // 2. CẢNH BÁO HẾT CỰC NGON: Sau khi tăng lên, giá quay đầu giảm >= 1.5% từ đỉnh kèm lực bán rút ròng
+      else if (pos.highestPrice >= pos.entryPrice * 1.015 && dropFromPeakPct >= 1.5 && (takerSellPct5 >= 58 || netCashflowSell >= 30_000)) {
         isHetNgon = true;
-        hetNgonReason = `Cảnh báo cá mập xả tháo ồ ạt: Taker Bán ${takerSellPct5.toFixed(1)}% với volume rút ròng -${Math.round(netCashflowSell).toLocaleString()} USDT. Thoát vị thế khẩn cấp bảo toàn vốn!`;
+        hetNgonReason = `Dòng tiền bơm vào đã ngừng lại, giá tụt -${dropFromPeakPct.toFixed(2)}% từ đỉnh ($${pos.highestPrice}). Lực bán Taker ${takerSellPct5.toFixed(1)}% với volume rút ròng -${Math.round(netCashflowSell).toLocaleString()} USDT. Đóng lệnh bảo toàn phần lãi hiện tại!`;
+      }
+      // 3. CẢNH BÁO HẾT CỰC NGON: Cá mập ngừng bơm & xả hàng mạnh (Taker Sell >= 65% với Net Outflow >= 50,000 USDT)
+      else if (currentPrice < pos.entryPrice * 0.996 && takerSellPct5 >= 65 && netCashflowSell >= 50_000) {
+        isHetNgon = true;
+        hetNgonReason = `Cá mập ngừng bơm và bắt đầu xả hàng: Taker Bán ${takerSellPct5.toFixed(1)}% với volume rút ròng -${Math.round(netCashflowSell).toLocaleString()} USDT. Thoát vị thế ngay bảo toàn vốn!`;
       }
 
-      // THÔNG BÁO DUY NHẤT 1 LẦN RỒI XÓA VỊ THẾ NGAY LẬP TỨC
+      // THÔNG BÁO CẢNH BÁO HẾT CỰC NGON - DUY NHẤT 1 LẦN RỒI XÓA VỊ THẾ
       if (isHetNgon) {
-        this.logger.warn(`🛑 [THOÁT LỆNH - DUY NHẤT 1 LẦN] ${symbol} -> ${hetNgonReason}`);
+        this.logger.warn(`🛑 [CẢNH BÁO HẾT CỰC NGON] ${symbol} -> ${hetNgonReason}`);
         await this.telegramService.sendHetNgonMultiCandleAlert({
           symbol,
           entryPrice: pos.entryPrice,
           currentPrice,
+          highestPrice: pos.highestPrice,
           profitPct,
           candlesAnalyzed: 5,
           takerSellPct: takerSellPct5,
           netCashflowSell: Math.abs(netCashflowSell),
-          dropFromPeakPct: 0,
+          dropFromPeakPct,
           reasonText: hetNgonReason,
         });
 
