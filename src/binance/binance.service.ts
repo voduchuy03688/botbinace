@@ -43,8 +43,8 @@ export class BinanceService {
     Accept: 'application/json',
   };
 
-  // Lọc các coin Futures có thanh khoản 24h >= 1,500,000 USDT (loại bỏ coin rác kém thanh khoản, tránh bẫy giật ảo)
-  private readonly MIN_VOLUME_24H_USDT = 1_500_000;
+  // Lọc các coin Futures có thanh khoản 24h >= 3,000,000 USDT (loại bỏ hoàn toàn coin rác kém thanh khoản, tránh bẫy giật ảo)
+  private readonly MIN_VOLUME_24H_USDT = 3_000_000;
 
   private ticker24hMap: Map<string, Ticker24hData> = new Map();
   private previousPriceMap: Map<string, { price: number; quoteVol: number; timestamp: number }> = new Map();
@@ -134,7 +134,7 @@ export class BinanceService {
   }
 
   // Lấy toàn bộ danh sách coin hợp lệ cho quét sóng tăng (Loại trừ coin sập quá sâu hoặc đã bay quá xa đu đỉnh)
-  getEligibleMoversPool(minVol = 1_500_000, min24hChange = -25.0, max24hChange = 65.0): Ticker24hData[] {
+  getEligibleMoversPool(minVol = 3_000_000, min24hChange = -25.0, max24hChange = 65.0): Ticker24hData[] {
     return Array.from(this.ticker24hMap.values()).filter((t) => {
       return (
         t.quoteVolume >= minVol &&

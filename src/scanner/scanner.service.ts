@@ -68,8 +68,8 @@ export class ScannerService implements OnApplicationBootstrap {
       // 2. Quản lý và theo dõi các vị thế đang chạy (TP1 +3.2%, TP2 +6.5%, hoặc SL an toàn)
       await this.trackActivePositions();
 
-      // 3. Lấy danh sách toàn bộ coin Futures hợp lệ (vol >= 1.5M USDT, 24h change trong khoảng -25% đến +65%)
-      const eligibleTickers = this.binanceService.getEligibleMoversPool(1_500_000, -25.0, 65.0);
+      // 3. Lấy danh sách toàn bộ coin Futures hợp lệ (vol >= 3.0M USDT, 24h change trong khoảng -25% đến +65%)
+      const eligibleTickers = this.binanceService.getEligibleMoversPool(3_000_000, -25.0, 65.0);
       if (eligibleTickers.length === 0) return;
 
       const now = Date.now();
@@ -78,8 +78,8 @@ export class ScannerService implements OnApplicationBootstrap {
         return now - lastAlert > 10 * 60 * 1000; // Cooldown 10 phút mỗi coin
       };
 
-      // ƯU TIÊN 1: Các coin đang có tốc độ giật giá & dòng tiền bơm vào tức thì (5s Velocity >= 0.15% hoặc inflow mạnh)
-      const velocityHotSymbols = this.binanceService.getHotVelocitySymbols(0.15, 8000).filter(isAvailable);
+      // ƯU TIÊN 1: Các coin đang có tốc độ giật giá & dòng tiền bơm vào tức thì (5s Velocity >= 0.18% hoặc inflow >= 12,000 USDT)
+      const velocityHotSymbols = this.binanceService.getHotVelocitySymbols(0.18, 12000).filter(isAvailable);
 
       // ƯU TIÊN 2: Top tăng giá mạnh nhất ngày (Gainers)
       const topGainers = [...eligibleTickers]
@@ -205,14 +205,14 @@ export class ScannerService implements OnApplicationBootstrap {
       const price3mAgo = klines[evalIndex - 3]?.close || openPrice;
       const priceChange3mPct = price3mAgo > 0 ? ((currentPrice - price3mAgo) / price3mAgo) * 100 : 0;
 
-      // Nến tăng giá: 1m tăng >= 0.30% hoặc đà 3m tăng liên tiếp >= 0.60%
-      if (priceChange1mPct < 0.30 && priceChange3mPct < 0.60) continue;
+      // Nến tăng giá: 1m tăng >= 0.38% hoặc đà 3m tăng liên tiếp >= 0.75%
+      if (priceChange1mPct < 0.38 && priceChange3mPct < 0.75) continue;
       if (priceChange1mPct > 5.0 || priceChange3mPct > 7.0) continue;
 
       // Nến không bị xả đè đầu quá mức
-      if (candleRange > 0 && upperWickRatio > 0.42) continue;
+      if (candleRange > 0 && upperWickRatio > 0.40) continue;
 
-      // 5. YÊU CẦU DÒNG TIỀN CỰC MẠNH (CÁ MẬP BƠM TIỀN - KHÔNG PHẢI ĐỔ VÀO VỪA VỪA):
+      // 5. YÊU CẦU DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
       const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
       const evalVol1m = evalCandle.quoteVolume;
       const evalBuyVol1m = evalCandle.takerBuyQuoteVolume;
@@ -229,16 +229,16 @@ export class ScannerService implements OnApplicationBootstrap {
       const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
       const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
 
-      // TIÊU CHUẨN DÒNG TIỀN MẠNH (LOẠI BỎ HOÀN TOÀN DÒNG TIỀN LÈO TÈO / VỪA VỪA):
-      // - Khối lượng 1m >= 50,000 USDT (hoặc vol 3m >= 150,000 USDT)
-      // - Volume đột biến gấp ít nhất 2.0x nền (hoặc 3m gấp 1.7x nền)
-      // - Phe Mua áp đảo rõ rệt: Taker Buy 1m >= 58% hoặc 3m >= 60%
-      // - Dòng tiền mua ròng: Net Inflow 1m >= 20,000 USDT HOẶC Net Inflow 3m >= 45,000 USDT
+      // TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
+      // - Khối lượng 1m >= 150,000 USDT (hoặc vol 3m >= 400,000 USDT)
+      // - Volume đột biến gấp ít nhất 2.5x nền (hoặc 3m gấp 2.0x nền)
+      // - Phe Mua áp đảo dứt khoát: Taker Buy 1m >= 62% hoặc 3m >= 64%
+      // - Dòng tiền mua ròng khủng: Net Inflow 1m >= 60,000 USDT HOẶC Net Inflow 3m >= 150,000 USDT
       const isStrongCashflow =
-        (evalVol1m >= 50_000 || vol3m >= 150_000) &&
-        (volumeMultiplier >= 2.0 || volumeMultiplier3m >= 1.7) &&
-        (takerBuyPct1m >= 58 || takerBuyPct3m >= 60) &&
-        (netCashflow1m >= 20_000 || netCashflow3m >= 45_000);
+        (evalVol1m >= 150_000 || vol3m >= 400_000) &&
+        (volumeMultiplier >= 2.5 || volumeMultiplier3m >= 2.0) &&
+        (takerBuyPct1m >= 62 || takerBuyPct3m >= 64) &&
+        (netCashflow1m >= 60_000 || netCashflow3m >= 150_000);
 
       if (!isStrongCashflow) continue;
 
@@ -301,25 +301,25 @@ export class ScannerService implements OnApplicationBootstrap {
       }
 
       // Tính điểm đánh giá (Score) đảm bảo dòng tiền bơm mạnh đạt chuẩn CỰC NGON > 90%
-      let score = 55;
+      let score = 50;
       if (distanceFromFootPct <= 1.8) score += 10;
       else if (distanceFromFootPct <= 2.8) score += 6;
 
-      if (volumeMultiplier >= 3.0 || volumeMultiplier3m >= 2.5) score += 12;
-      else if (volumeMultiplier >= 2.0) score += 7;
+      if (volumeMultiplier >= 3.5 || volumeMultiplier3m >= 3.0) score += 14;
+      else if (volumeMultiplier >= 2.5) score += 8;
 
-      if (takerBuyPct1m >= 70 || takerBuyPct3m >= 70) score += 12;
-      else if (takerBuyPct1m >= 60 || takerBuyPct3m >= 60) score += 7;
+      if (takerBuyPct1m >= 72 || takerBuyPct3m >= 72) score += 14;
+      else if (takerBuyPct1m >= 64 || takerBuyPct3m >= 64) score += 8;
 
-      if (netCashflow1m >= 80_000 || netCashflow3m >= 150_000) score += 12;
-      else if (netCashflow1m >= 30_000 || netCashflow3m >= 60_000) score += 7;
+      if (netCashflow1m >= 120_000 || netCashflow3m >= 250_000) score += 14;
+      else if (netCashflow1m >= 60_000 || netCashflow3m >= 150_000) score += 8;
 
-      if (distanceFromFoot15mPct <= 4.5) score += 8;
+      if (distanceFromFoot15mPct <= 4.0) score += 8;
       else score += 4;
 
       if (ticker24h.priceChangePercent <= 25.0 && ticker24h.priceChangePercent >= -10.0) score += 5;
 
-      if (velocityData && (velocityData.velocityPct >= 0.15 || velocityData.volInflow >= 10_000)) score += 6;
+      if (velocityData && (velocityData.velocityPct >= 0.20 || velocityData.volInflow >= 20_000)) score += 6;
 
       const forecastScore = Math.min(99, Math.round(score));
       if (forecastScore < 90) return false;
