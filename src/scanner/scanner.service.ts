@@ -214,20 +214,22 @@ export class ScannerService implements OnApplicationBootstrap {
       const distanceFromFootPct = ((currentPrice - baseMinLow) / baseMinLow) * 100;
       if (distanceFromFootPct < 0.35 || distanceFromFootPct > 3.80) continue;
 
-      // 3. BỨT PHÁ ĐỈNH HỘP: Giá hiện tại phải vượt hoặc chạm sát đỉnh nền đi ngang (bắt đầu chu kỳ sóng bay)
-      if (currentPrice < baseMaxHigh * 0.995) continue;
+      // 3. BỨT PHÁ ĐỈNH HỘP: Giá hiện tại phải bứt phá dứt khoát hoặc vượt đỉnh nền đi ngang
+      if (currentPrice < baseMaxHigh * 0.998) continue;
 
-      // 4. KIỂM TRA NẾN BỨT PHÁ (MOMENTUM TRIGGER)
+      // 4. KIỂM TRA NẾN BẬT TĂNG MẠNH (MOMENTUM BREAKOUT TRIGGER)
       const priceChange1mPct = ((closePrice - openPrice) / openPrice) * 100;
       const price3mAgo = klines[evalIndex - 3]?.close || openPrice;
       const priceChange3mPct = price3mAgo > 0 ? ((currentPrice - price3mAgo) / price3mAgo) * 100 : 0;
 
-      // Nến tăng giá: 1m tăng >= 0.38% hoặc đà 3m tăng liên tiếp >= 0.75%
-      if (priceChange1mPct < 0.38 && priceChange3mPct < 0.75) continue;
+      // Nến bắt buộc phải là nến xanh tăng giá dứt khoát: 1m tăng >= 0.65% hoặc 3m tăng liên tục >= 1.20%
+      if (closePrice <= openPrice) continue;
+      if (priceChange1mPct < 0.65 && priceChange3mPct < 1.20) continue;
+      if (priceChange1mPct < 0.40) continue; // Triệt tiêu nến 1m lèo tèo
       if (priceChange1mPct > 5.0 || priceChange3mPct > 7.0) continue;
 
-      // Nến không bị xả đè đầu quá mức
-      if (candleRange > 0 && upperWickRatio > 0.40) continue;
+      // Nến không bị xả đè đầu: râu trên ngắn (<= 28% thân nến) để đảm bảo lực mua nuốt trọn lực bán
+      if (candleRange > 0 && upperWickRatio > 0.28) continue;
 
       // 5. YÊU CẦU DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
       const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
@@ -248,29 +250,29 @@ export class ScannerService implements OnApplicationBootstrap {
 
       // 5.1. BẢO VỆ TUYỆT ĐỐI KHỎI BẪY "KÉO LÊ ĐỂ BÁN" (BULL TRAP / DISTRIBUTION):
       // Cá mập kéo rướn giá lên để dụ thanh khoản nhỏ lẻ nhưng âm thầm xả hàng:
-      // - Râu trên dài (upperWickRatio > 0.32): kéo lên bị đè xả ngược lại
+      // - Râu trên dài (upperWickRatio > 0.28): kéo lên bị đè xả ngược lại
       // - Kéo rướn nhưng Volume cạn (Volume Exhaustion): Vol hiện tại sụt giảm trong khi giá tăng
-      // - Phân kỳ dòng tiền: Taker Buy < 62% hoặc dòng tiền 5s velocity báo âm
+      // - Phân kỳ dòng tiền: Taker Buy < 65% hoặc dòng tiền 5s velocity báo âm
       const prevCandle1 = klines[evalIndex - 1];
       const isVolumeExhausted = prevCandle1 && evalVol1m < prevCandle1.quoteVolume * 0.70 && priceChange1mPct > 0;
-      const isUpperWickRejected = upperWickRatio > 0.32;
-      const isVelocityOutflow = velocityData && (velocityData.velocityPct < -0.10);
-      const isKeoLeDeBan = isUpperWickRejected || (isVolumeExhausted && takerBuyPct1m < 65) || isVelocityOutflow;
+      const isUpperWickRejected = upperWickRatio > 0.28;
+      const isVelocityOutflow = velocityData && (velocityData.velocityPct < -0.05);
+      const isKeoLeDeBan = isUpperWickRejected || (isVolumeExhausted && takerBuyPct1m < 66) || isVelocityOutflow;
 
       if (isKeoLeDeBan) {
         continue; // Tuyệt đối loại bỏ bẫy kéo lê để bán!
       }
 
-      // 5.2. TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
-      // - Khối lượng 1m >= 150,000 USDT (hoặc vol 3m >= 400,000 USDT)
-      // - Volume đột biến gấp ít nhất 2.5x nền (hoặc 3m gấp 2.0x nền)
-      // - Phe Mua áp đảo dứt khoát: Taker Buy 1m >= 62% hoặc 3m >= 64%
-      // - Dòng tiền mua ròng khủng: Net Inflow 1m >= 60,000 USDT HOẶC Net Inflow 3m >= 150,000 USDT
+      // 5.2. TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH & MUA ÁP ĐẢO (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU):
+      // - Khối lượng 1m >= 180,000 USDT (hoặc vol 3m >= 450,000 USDT)
+      // - Volume đột biến gấp ít nhất 2.8x nền (hoặc 3m gấp 2.2x nền)
+      // - Phe Mua áp đảo dứt khoát: Taker Buy 1m >= 65% hoặc 3m >= 66%
+      // - Dòng tiền mua ròng khủng: Net Inflow 1m >= 75,000 USDT HOẶC Net Inflow 3m >= 180,000 USDT
       const isStrongCashflow =
-        (evalVol1m >= 150_000 || vol3m >= 400_000) &&
-        (volumeMultiplier >= 2.5 || volumeMultiplier3m >= 2.0) &&
-        (takerBuyPct1m >= 62 || takerBuyPct3m >= 64) &&
-        (netCashflow1m >= 60_000 || netCashflow3m >= 150_000);
+        (evalVol1m >= 180_000 || vol3m >= 450_000) &&
+        (volumeMultiplier >= 2.8 || volumeMultiplier3m >= 2.2) &&
+        (takerBuyPct1m >= 65 || takerBuyPct3m >= 66) &&
+        (netCashflow1m >= 75_000 || netCashflow3m >= 180_000);
 
       if (!isStrongCashflow) continue;
 
@@ -341,7 +343,7 @@ export class ScannerService implements OnApplicationBootstrap {
       const buy15mTotal = last3Klines15m.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
       const netCashflow15m = buy15mTotal - (vol15mTotal - buy15mTotal);
       const takerBuyPct15m = vol15mTotal > 0 ? (buy15mTotal / vol15mTotal) * 100 : 50;
-      if (takerBuyPct15m < 48) {
+      if (takerBuyPct15m < 50 || netCashflow15m <= 0) {
         return false;
       }
 

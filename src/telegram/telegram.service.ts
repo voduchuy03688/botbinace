@@ -172,7 +172,7 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO TÍN HIỆU REALTIME (NGẮN GỌN - ĐỦ THÔNG TIN CẦN THIẾT)
+  // THÔNG BÁO TÍN HIỆU REALTIME (RÚT GỌN - CHỈ BÁO COIN BƠM DÒNG TIỀN & BẬT TĂNG MẠNH)
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
@@ -186,97 +186,63 @@ export class TelegramService {
     const change24hStr = `${payload.change24hPct >= 0 ? '+' : ''}${payload.change24hPct.toFixed(1)}%`;
 
     const lines: string[] = [
-      `💎 🚀 <b>[KÈO CỰC NGON]</b> <code>${payload.symbol}</code>`,
-      `• <b>Giá hiện tại:</b> <code>$${payload.currentPrice}</code>`,
-      `• <b>Tăng giá:</b> 1m: <b>${change1mStr}</b> | 24h: <b>${change24hStr}</b>`,
-      `• <b>Dòng tiền vào:</b> 1m Vol: <b>${vol1mStr} USDT</b> (Nổ <b>${payload.volumeMultiplier.toFixed(1)}x</b> | Mua ròng: <code>${net1mStr} USDT</code> | Taker Mua: <b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
-      `• <b>Vị thế chân sóng:</b> Mới nhấc <b>+${(payload.distanceFromFootPct || 0).toFixed(2)}%</b> từ nền đáy $${payload.baseMinLow || payload.lowPrice}`,
-      `----------------------------------------`,
-      `🎯 <b>Lệnh:</b> Entry <code>$${payload.entryPrice}</code> | TP1: <code>$${payload.suggestedTp1.toFixed(4)}</code> | TP2: <code>$${payload.suggestedTp2.toFixed(4)}</code> | SL: <code>$${payload.suggestedSl.toFixed(4)}</code>`,
-      `🔗 <a href="${binanceUrl}">LONG Ngay Trên Binance Futures</a>`,
+      `🚀 <b>${payload.symbol}</b> | <b>BƠM MẠNH DÒNG TIỀN VÀO</b>`,
+      `💵 <b>Giá:</b> <code>$${payload.currentPrice}</code> (1m: <b>${change1mStr}</b> | 24h: <b>${change24hStr}</b>)`,
+      `🌊 <b>Dòng tiền:</b> Vol <code>${vol1mStr}</code> (<b>${payload.volumeMultiplier.toFixed(1)}x</b>) | Mua ròng: <code>${net1mStr}</code> (<b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
+      `🎯 <b>Entry:</b> <code>$${payload.entryPrice}</code> | <b>TP:</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (+3.2%) | <b>SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
+      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
-
   // =========================================================================
-  // THÔNG BÁO CHỐT LỜI TP1 / TP2
+  // THÔNG BÁO CHỐT LỜI TP1 / TP2 (RÚT GỌN)
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const highestText = payload.highestPrice ? ` | Đỉnh đạt được: <code>$${payload.highestPrice}</code>` : '';
+    const highestText = payload.highestPrice ? ` | Đỉnh: <code>$${payload.highestPrice}</code>` : '';
 
     const lines: string[] = [
-      `🎯 💰 🟢 <b>[CHỐT LỜI THÀNH CÔNG: ${payload.targetLevel}]</b>`,
-      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `• <b>Lợi Nhuận Bỏ Túi:</b> <b>+${payload.profitPct.toFixed(2)}%</b> 🚀${highestText}`,
-      `• <b>Giá Vào (Entry):</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Chốt:</b> <code>$${payload.currentPrice}</code>`,
-      '----------------------------------------',
-      ...(payload.reasonDetail
-        ? [
-            `🌊 <b>TÍN HIỆU ĐI NGANG & DÒNG TIỀN BÁN:</b>`,
-            `• <i>${payload.reasonDetail}</i>`,
-            '----------------------------------------',
-          ]
-        : []),
-      `👉 <b>HÀNH ĐỘNG KHUYẾN NGHỊ:</b> <b>${payload.suggestedAction}</b>`,
-      '----------------------------------------',
-      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Chốt Lời Trên Binance Futures Ngay</a>`,
+      `💰 <b>[CHỐT LỜI ${payload.targetLevel}] ${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b>${highestText}`,
+      `• <b>Giá:</b> Entry <code>$${payload.entryPrice}</code> ➔ Chốt <code>$${payload.currentPrice}</code>`,
+      `• <b>Hành động:</b> <b>${payload.suggestedAction}</b>`,
+      ...(payload.reasonDetail ? [`• <i>${payload.reasonDetail}</i>`] : []),
+      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
-  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (DUY NHẤT 1 LẦN)
+  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (RÚT GỌN)
   // =========================================================================
   async sendStopLossAlert(payload: StopLossAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
 
     const lines: string[] = [
-      '🛑 🔴 <b>[BẢO TOÀN VỐN: CHẠM MỨC DỪNG LỖ]</b>',
-      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `• <b>Biến Động:</b> <code>${payload.lossPct.toFixed(2)}%</code>`,
-      `• <b>Giá Vào:</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Thoát:</b> <code>$${payload.currentPrice}</code>`,
-      '----------------------------------------',
-      `💡 <b>Lý do:</b> <i>${payload.reasonText}</i>`,
-      '👉 <b>HÀNH ĐỘNG:</b> Thoát lệnh dứt khoát bảo toàn vốn, rủi ro cực thấp đã được khống chế an toàn!',
-      '----------------------------------------',
-      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Kiểm Tra Binance Futures</a>`,
+      `🛑 <b>[CẮT LỖ BẢO TOÀN VỐN] ${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b>`,
+      `• <b>Giá:</b> Entry <code>$${payload.entryPrice}</code> ➔ Thoát <code>$${payload.currentPrice}</code>`,
+      `• <b>Lý do:</b> <i>${payload.reasonText}</i>`,
+      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
-  // THÔNG BÁO CẢNH BÁO: HẾT CỰC NGON - THOÁT LỆNH NGAY
+  // THÔNG BÁO CẢNH BÁO: SUY YẾU DÒNG TIỀN - THOÁT LỆNH (RÚT GỌN)
   // =========================================================================
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const highestText = payload.highestPrice ? ` (Đỉnh đạt: <code>$${payload.highestPrice}</code>)` : '';
-    const dropText = payload.dropFromPeakPct > 0 ? ` | Tụt từ đỉnh: <b>-${payload.dropFromPeakPct.toFixed(2)}%</b>` : '';
+    const pnlSign = payload.profitPct >= 0 ? '+' : '';
 
     const lines: string[] = [
-      '🛑 ⚠️ ⚡ <b>[CẢNH BÁO: HẾT CỰC NGON - THOÁT LỆNH NGAY]</b>',
-      '🔻 <b>DÒNG TIỀN BƠM VÀO ĐÃ SUY YẾU / XUẤT HIỆN LỰC XẢ CỦA CÁ MẬP!</b>',
-      '👉 <b>HÀNH ĐỘNG KHUYẾN NGHỊ: ĐÓNG TOÀN BỘ VỊ THẾ BẢO TOÀN LÃI / VỐN!</b>',
-      '----------------------------------------',
-      `<b>Mã Coin:</b> <code>${payload.symbol}</code>`,
-      `• <b>Giá Vào (Entry):</b> <code>$${payload.entryPrice}</code> ➔ <b>Giá Thoát:</b> <code>$${payload.currentPrice}</code>`,
-      `• <b>Hiệu Suất Vị Thế:</b> <b>${payload.profitPct >= 0 ? '+' : ''}${payload.profitPct.toFixed(2)}%</b>${highestText}${dropText}`,
-      '----------------------------------------',
-      '🌊 <b>DẤU HIỆU DÒNG TIỀN ĐẢO CHIỀU:</b>',
-      `• <b>Lực Bán Chủ Động (Taker Sell):</b> <b>${payload.takerSellPct.toFixed(1)}%</b>`,
-      `• <b>Dòng Tiền Bị Rút Ròng:</b> <code>-${Math.round(Math.abs(payload.netCashflowSell)).toLocaleString()} USDT</code>`,
-      '----------------------------------------',
-      `💡 <b>Lý do cảnh báo:</b> <i>${payload.reasonText}</i>`,
-      '----------------------------------------',
-      '⚠️ <i>Lưu ý: Tín hiệu CỰC NGON của coin này đã kết thúc, bot dừng theo dõi để tìm kèo chân sóng mới.</i>',
-      `⏰ <i>${new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</i>`,
-      `🔗 <a href="${binanceUrl}">Đóng Vị Thế Trên Binance Futures Ngay</a>`,
+      `⚠️ <b>[DÒNG TIỀN SUY YẾU - THOÁT LỆNH] ${payload.symbol}</b>`,
+      `• <b>Vị thế:</b> <b>${pnlSign}${payload.profitPct.toFixed(2)}%</b> (Entry: <code>$${payload.entryPrice}</code> ➔ Thoát: <code>$${payload.currentPrice}</code>)`,
+      `• <b>Dòng tiền bán:</b> Taker Sell <b>${payload.takerSellPct.toFixed(1)}%</b> | Rút ròng: <code>-${Math.round(Math.abs(payload.netCashflowSell)).toLocaleString()} USDT</code>`,
+      `• <b>Lý do:</b> <i>${payload.reasonText}</i>`,
+      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
     ];
 
     return this.sendMessage(lines.filter(Boolean).join('\n'));
