@@ -687,9 +687,11 @@ export class ScannerService implements OnApplicationBootstrap {
   }
 
   // =========================================================================
-  // CHIẾN THUẬT: BẮT CHỈNH MẠNH (15% - 25%) TRÊN TOKEN TĂNG VÀI GIỜ / VÀI NGÀY
-  // Dành cho các coin đã tăng mạnh liên tục (chuẩn bị dựng cột tiếp),
-  // vừa có nhịp xả/chỉnh sâu 15% - 25% và có dòng tiền cá mập quay lại đỡ giá
+  // =========================================================================
+  // CHIẾN THUẬT: BẮT CHỈNH (15% - 30%) KHI CÓ DÒNG TIỀN VÀO ĐỠ MẠNH
+  // - Chỉ bắt khi token giảm 15% - 30% từ đỉnh sóng tăng gần nhất
+  // - BẮT BUỘC có dòng tiền lớn gom đỡ giá (Taker Buy >= 58%, Inflow lớn, nến rút chân / hồi phục)
+  // - TUYỆT ĐỐI KHÔNG BẮT DAO RƠI khi giá đang cắm đầu giảm mà chưa có dòng tiền đỡ
   // =========================================================================
   private async scanTrendPullbacks(eligibleTickers: Ticker24hData[]) {
     const now = Date.now();
@@ -698,13 +700,12 @@ export class ScannerService implements OnApplicationBootstrap {
       return now - lastAlert > 15 * 60 * 1000; // Cooldown 15 phút
     };
 
-    // Lọc các coin có thanh khoản lớn và có biên độ dao động trong ngày lớn
-    // (Biên độ 24h >= 18% hoặc 24h change >= +8%, volume >= 6,000,000 USDT)
+    // Lọc các coin có thanh khoản tốt (>= 4,000,000 USDT) và có biên độ sóng mạnh trong ngày (>= 15%)
     const candidates = eligibleTickers.filter((t) => {
-      if (!isAvailable(t.symbol) || t.quoteVolume < 6_000_000) return false;
+      if (!isAvailable(t.symbol) || t.quoteVolume < 4_000_000) return false;
       const range24h =
         t.highPrice > 0 ? ((t.highPrice - t.lowPrice) / t.lowPrice) * 100 : 0;
-      return range24h >= 18.0 || t.priceChangePercent >= 8.0;
+      return range24h >= 15.0 || Math.abs(t.priceChangePercent) >= 5.0;
     });
 
     if (candidates.length === 0) return;
@@ -712,7 +713,7 @@ export class ScannerService implements OnApplicationBootstrap {
     // Ưu tiên coin có volume lớn nhất
     const topCandidates = candidates
       .sort((a, b) => b.quoteVolume - a.quoteVolume)
-      .slice(0, 15);
+      .slice(0, 20);
 
     await Promise.all(
       topCandidates.map((t) => this.analyzeTrendPullback(t, now)),
@@ -722,7 +723,7 @@ export class ScannerService implements OnApplicationBootstrap {
   private async analyzeTrendPullback(ticker24h: Ticker24hData, now: number) {
     const symbol = ticker24h.symbol;
     try {
-      // 1. Lấy dữ liệu 1h (24 nến = 24 tiếng gần nhất)
+      // 1. LẤY DỮ LIỆU 1H (24 nến = 24 tiếng gần nhất) ĐỂ XÁC ĐỊNH ĐỈNH VÀ CHU KỲ TĂNG
       const klines1h = await this.binanceService.getKlines(symbol, '1h', 24);
       if (!klines1h || klines1h.length < 12) return;
 
@@ -730,72 +731,153 @@ export class ScannerService implements OnApplicationBootstrap {
       const peakHigh = Math.max(...klines1h.map((k) => k.high));
       if (baseLow <= 0 || peakHigh <= baseLow) return;
 
-      // Token phải từng có đợt tăng mạnh ít nhất +18% trở lên trong chu kỳ này
+      // Token phải từng có đợt tăng mạnh ít nhất +15% trở lên trong chu kỳ này
       const prePumpGain = ((peakHigh - baseLow) / baseLow) * 100;
-      if (prePumpGain < 18.0) return;
+      if (prePumpGain < 15.0) return;
 
       const currentPrice = ticker24h.lastPrice;
       if (currentPrice <= 0) return;
 
       // 2. TÍNH ĐỘ SÂU NHỊP CHỈNH TỪ ĐỈNH GẦN NHẤT
-      // Yêu cầu: Chỉnh mạnh tầm 15% - 25% (Loại bỏ hoàn toàn các nhịp chỉnh nhỏ 1% - 2%)
+      // Yêu cầu: Giảm 15% - 30% từ đỉnh
+      // (< 15%: chỉnh nông 1-2%, bỏ qua | > 30%: xả sập gãy trend, bỏ qua)
       const pullbackPct = ((peakHigh - currentPrice) / peakHigh) * 100;
-      if (pullbackPct < 14.0 || pullbackPct > 28.0) return;
+      if (pullbackPct < 15.0 || pullbackPct > 30.0) return;
 
-      // 3. KIỂM TRA DÒNG TIỀN QUAY LẠI ĐỠ GIÁ Ở KHUNG 5m & 1m (Dấu hiệu sắp bật lại / dựng cột)
-      const klines5m = await this.binanceService.getKlines(symbol, '5m', 6);
-      if (!klines5m || klines5m.length < 4) return;
+      // 3. LẤY DỮ LIỆU ĐA KHUNG THỜI GIAN: 5m (12 nến = 1 giờ) & 1m (15 nến = 15 phút)
+      const [klines5m, klines1m] = await Promise.all([
+        this.binanceService.getKlines(symbol, '5m', 12),
+        this.binanceService.getKlines(symbol, '1m', 15),
+      ]);
+      if (!klines5m || klines5m.length < 6 || !klines1m || klines1m.length < 10) return;
 
-      const recent5m = klines5m.slice(-3);
-      const totalBuyVol = recent5m.reduce(
+      const dipLow = Math.min(...klines5m.map((k) => k.low));
+      if (dipLow <= 0) return;
+
+      // =====================================================================
+      // 4. BỘ LỌC LOẠI TRỪ: ĐANG GIẢM CHƯA CÓ DÒNG TIỀN ĐỠ -> TUYỆT ĐỐI KHÔNG VÀO
+      // =====================================================================
+
+      // a. Giá đang cắm đầu ở sát đáy thấp nhất chưa hề có phản ứng nảy lên (đang đục đáy / dao rơi)
+      const bounceFromDipPct = ((currentPrice - dipLow) / dipLow) * 100;
+      if (bounceFromDipPct < 0.25) {
+        return; // Chưa hề có phản ứng bật lên khỏi đáy
+      }
+
+      // b. Nến 5m gần nhất đang bị xả đặc (Bearish Marubozu) - Không hề có râu đỡ bên dưới
+      const latest5m = klines5m[klines5m.length - 1];
+      const range5m = latest5m.high - latest5m.low;
+      if (range5m > 0 && latest5m.close < latest5m.open) {
+        const body5m = latest5m.open - latest5m.close;
+        const lowerWick5m = latest5m.close - latest5m.low;
+        // Nến đỏ thân dài chiếm > 65% cây nến và râu dưới < 15% -> Đang xả mạnh cắm đầu
+        if (body5m / range5m > 0.65 && lowerWick5m / range5m < 0.15) {
+          return;
+        }
+      }
+
+      // c. Khung 1m đang trong đà xả dốc liên tục không ngơi nghỉ
+      const recent3_1m = klines1m.slice(-3);
+      const isContinuous1mDump = recent3_1m.every((k) => k.close < k.open);
+      const buyVol1m_3 = recent3_1m.reduce((sum, k) => sum + k.takerBuyQuoteVolume, 0);
+      const totalVol1m_3 = recent3_1m.reduce((sum, k) => sum + k.quoteVolume, 0);
+      const takerBuyPct1m_3 = totalVol1m_3 > 0 ? (buyVol1m_3 / totalVol1m_3) * 100 : 0;
+      if (isContinuous1mDump && takerBuyPct1m_3 < 48.0) {
+        return; // 3 nến 1m liên tiếp cắm đỏ và lực mua dưới 48% -> Đang xả dốc
+      }
+
+      // =====================================================================
+      // 5. ĐIỀU KIỆN KÍCH HOẠT: CÓ DÒNG TIỀN VÀO ĐỠ MẠNH (BUY ABSORPTION & INFLOW)
+      // =====================================================================
+
+      // Tính dòng tiền 3 nến 5m gần nhất (15 phút quanh đáy cú chỉnh)
+      const recent3_5m = klines5m.slice(-3);
+      const totalBuyVol = recent3_5m.reduce(
         (sum, k) => sum + k.takerBuyQuoteVolume,
         0,
       );
-      const totalVol = recent5m.reduce((sum, k) => sum + k.quoteVolume, 0);
+      const totalVol = recent3_5m.reduce((sum, k) => sum + k.quoteVolume, 0);
       const takerBuyPct = totalVol > 0 ? (totalBuyVol / totalVol) * 100 : 0;
 
-      const latestCandle = klines5m[klines5m.length - 1];
-      const isReversalCandle =
-        latestCandle.close >= latestCandle.open ||
-        latestCandle.close - latestCandle.low >
-          latestCandle.high - latestCandle.close;
-
-      // Kích hoạt khi có dòng tiền mua đỡ giá ở đáy cú chỉnh (Taker Buy >= 55% và có nến rút chân/hồi phục)
-      if (takerBuyPct >= 55 && (totalBuyVol >= 25_000 || isReversalCandle)) {
-        const dipLow = Math.min(...klines5m.map((k) => k.low));
-        const suggestedSl = dipLow > 0 ? dipLow * 0.985 : currentPrice * 0.97;
-        const suggestedTp = currentPrice * 1.08; // Mục tiêu ăn nhịp bật lại +8% đến +15%
-
-        this.symbolCooldowns.set(symbol, now);
-
-        this.logger.warn(
-          `💎 [BẮT CHỈNH MẠNH - CỰC NGON] ${symbol} -> Đã chỉnh -${pullbackPct.toFixed(1)}% từ đỉnh (Bơm trước đó: +${prePumpGain.toFixed(1)}%), Taker Buy 5m: ${takerBuyPct.toFixed(0)}% (${Math.round(totalBuyVol / 1000)}k USDT), Entry: ${currentPrice}`,
-        );
-
-        await this.telegramService.sendPullbackDipAlert({
-          symbol,
-          currentPrice,
-          pullbackPct,
-          buyVolume: totalBuyVol,
-          takerBuyPct,
-          suggestedTp,
-          suggestedSl,
-        });
-
-        // Theo dõi vị thế để quản lý chốt lời TP / thoát lệnh tự động
-        this.activePositions.set(symbol, {
-          symbol,
-          direction: 'LONG',
-          entryPrice: currentPrice,
-          entryTime: now,
-          tp1Price: currentPrice * 1.045,
-          tp2Price: suggestedTp,
-          slPrice: suggestedSl,
-          tp1Hit: false,
-          highestPrice: currentPrice,
-          lowestPrice: currentPrice,
-        });
+      // Khối lượng mua đỡ thực tế phải lớn (tối thiểu 60k USDT, coin lớn >= 120k USDT)
+      const minBuyVolumeRequired = ticker24h.quoteVolume >= 12_000_000 ? 120_000 : 60_000;
+      if (totalBuyVol < minBuyVolumeRequired) {
+        return; // Dòng tiền mua đỡ quá bé, chưa có cá mập vào đỡ
       }
+
+      // Taker Buy phải chiếm ưu thế áp đảo tại đáy cú chỉnh (tối thiểu 58%)
+      if (takerBuyPct < 58.0) {
+        return; // Phe mua chưa làm chủ vùng giá này
+      }
+
+      // 6. HÀNH ĐỘNG GIÁ XÁC NHẬN ĐÃ ĐỠ THÀNH CÔNG VÀ ĐANG ĐẢO CHIỀU ĐI LÊN
+      const prev5m = klines5m[klines5m.length - 2];
+      const checkHammer = (k: KlineData) => {
+        const rng = k.high - k.low;
+        if (rng <= 0) return false;
+        const lowerWick = Math.min(k.open, k.close) - k.low;
+        const wickPct = (lowerWick / rng) * 100;
+        const kBuyPct = k.quoteVolume > 0 ? (k.takerBuyQuoteVolume / k.quoteVolume) * 100 : 0;
+        return wickPct >= 38.0 && (kBuyPct >= 55.0 || k.takerBuyQuoteVolume >= 30_000);
+      };
+
+      const hasHammerSupport = checkHammer(latest5m) || checkHammer(prev5m);
+
+      const hasBullishEngulfing =
+        latest5m.close > latest5m.open &&
+        (latest5m.close - latest5m.open) / (latest5m.high - latest5m.low || 1) >= 0.35 &&
+        (latest5m.takerBuyQuoteVolume / (latest5m.quoteVolume || 1)) * 100 >= 58.0;
+
+      const recent5_1m = klines1m.slice(-5);
+      const green1mCandles = recent5_1m.filter((k) => k.close >= k.open).length;
+      const hasMicroBounce1m =
+        bounceFromDipPct >= 0.5 &&
+        bounceFromDipPct <= 3.5 &&
+        green1mCandles >= 2 &&
+        klines1m[klines1m.length - 1].close >= klines1m[klines1m.length - 1].open;
+
+      const isStrongSupportConfirmed =
+        hasHammerSupport || hasBullishEngulfing || hasMicroBounce1m;
+
+      if (!isStrongSupportConfirmed) {
+        return; // Chưa có mô hình nến xác nhận đỡ giá thành công
+      }
+
+      // =====================================================================
+      // 7. THIẾT LẬP VỊ THẾ & GỬI TÍN HIỆU
+      // =====================================================================
+      const suggestedSl = dipLow > 0 ? dipLow * 0.985 : currentPrice * 0.97;
+      const suggestedTp = currentPrice * 1.085; // Mục tiêu ăn nhịp bật lại +8.5% đến +15%
+
+      this.symbolCooldowns.set(symbol, now);
+
+      this.logger.warn(
+        `💎 [BẮT CHỈNH 15-30% - CÓ DÒNG TIỀN ĐỠ MẠNH] ${symbol} -> Đã chỉnh -${pullbackPct.toFixed(1)}% từ đỉnh (Bơm: +${prePumpGain.toFixed(1)}%), Taker Buy 5m: ${takerBuyPct.toFixed(0)}% (${Math.round(totalBuyVol / 1000)}k USDT), Bật đáy: +${bounceFromDipPct.toFixed(1)}%, Entry: ${currentPrice}`,
+      );
+
+      await this.telegramService.sendPullbackDipAlert({
+        symbol,
+        currentPrice,
+        pullbackPct,
+        buyVolume: totalBuyVol,
+        takerBuyPct,
+        suggestedTp,
+        suggestedSl,
+      });
+
+      // Theo dõi vị thế để quản lý chốt lời TP / thoát lệnh tự động
+      this.activePositions.set(symbol, {
+        symbol,
+        direction: 'LONG',
+        entryPrice: currentPrice,
+        entryTime: now,
+        tp1Price: currentPrice * 1.045,
+        tp2Price: suggestedTp,
+        slPrice: suggestedSl,
+        tp1Hit: false,
+        highestPrice: currentPrice,
+        lowestPrice: currentPrice,
+      });
     } catch (err: any) {
       this.logger.error(`Lỗi phân tích bắt chỉnh ${symbol}: ${err.message}`);
     }
