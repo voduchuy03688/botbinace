@@ -4,6 +4,7 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { BinanceWsManager } from './websocket/binance-ws-manager.js';
 import { TimeWindowRingBuffer } from './buffer/time-window-ring-buffer.js';
 import { DynamicBaselineEngine } from './baseline/dynamic-baseline.js';
@@ -15,6 +16,7 @@ import {
   NormalizedTrade,
 } from './types/market-event.types.js';
 import { BinanceService } from '../binance/binance.service.js';
+import { TelegramService } from '../telegram/telegram.service.js';
 import { LiquidityEngine } from './features/liquidity-engine.js';
 import { OrderBookHistoryBuffer } from './buffer/orderbook-history-buffer.js';
 import { LiquidityFeatureSnapshot } from './types/liquidity.types.js';
@@ -40,6 +42,9 @@ export class DetectorService
   private readonly latestDepths: Map<string, NormalizedDepthSnapshot> =
     new Map();
 
+  private readonly symbolCooldowns: Map<string, number> = new Map();
+  private lastGlobalAlertTime = 0;
+  private isScanning = false;
   private isRunning = false;
 
   constructor(
@@ -51,6 +56,7 @@ export class DetectorService
     private readonly derivativesEngine: DerivativesMarketEngine,
     private readonly scoringEngine: ScoringEngine,
     private readonly binanceService: BinanceService,
+    private readonly telegramService: TelegramService,
   ) {
     this.setupListeners();
   }
@@ -270,5 +276,45 @@ export class DetectorService
       if (pDiff !== 0) return pDiff;
       return b.totalScore - a.totalScore;
     });
+  }
+
+  /**
+   * Realtime scan loop running every 3 seconds across live WebSocket microstructure streams.
+   * Automatically broadcasts verified Early Expansion (EXECUTE) signals to Telegram.
+   */
+  @Cron('*/3 * * * * *')
+  async handleRealtimeExpansionScan(): Promise<void> {
+    if (!this.isRunning || this.isScanning) return;
+    this.isScanning = true;
+
+    try {
+      const rankedSignals = this.scanAll();
+      const now = Date.now();
+
+      for (const output of rankedSignals) {
+        if (output.signal !== 'EXECUTE') continue;
+
+        const lastAlert = this.symbolCooldowns.get(output.symbol) || 0;
+        if (now - lastAlert < 10 * 60 * 1000) continue; // 10 minutes cooldown per token
+        if (now - this.lastGlobalAlertTime < 3000) continue; // 3 seconds global cooldown
+
+        const tradeBuffer = this.ringBuffers.get(output.symbol);
+        const currentPrice = tradeBuffer ? tradeBuffer.getLatestPrice() : 0;
+        if (currentPrice <= 0) continue;
+
+        this.symbolCooldowns.set(output.symbol, now);
+        this.lastGlobalAlertTime = now;
+
+        this.logger.log(
+          `⚡ [CHÂN SÓNG PHÁT HIỆN: ${output.symbol}] Score: ${output.totalScore}/100 | Giá: ${currentPrice} | CVD Accel: +${Math.round(output.cvdAcceleration)}`,
+        );
+
+        await this.telegramService.sendEarlyExpansionAlert(output, currentPrice);
+      }
+    } catch (err: any) {
+      this.logger.error(`Error in realtime expansion scan: ${err.message}`);
+    } finally {
+      this.isScanning = false;
+    }
   }
 }

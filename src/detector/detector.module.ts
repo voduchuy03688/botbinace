@@ -8,6 +8,7 @@ import { DerivativesMarketEngine } from './features/derivatives-market-engine.js
 import { ScoringEngine } from './scoring/scoring-engine.js';
 import { DetectorService } from './detector.service.js';
 import { BinanceService } from '../binance/binance.service.js';
+import { TelegramService } from '../telegram/telegram.service.js';
 
 @Module({
   providers: [
@@ -19,6 +20,7 @@ import { BinanceService } from '../binance/binance.service.js';
     DerivativesMarketEngine,
     ScoringEngine,
     BinanceService,
+    TelegramService,
     DetectorService,
   ],
   exports: [

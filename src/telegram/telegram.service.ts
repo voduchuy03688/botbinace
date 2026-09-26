@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { DetectorOutput } from '../detector/types/detector-output.types.js';
 
 export interface VipSpikeAlertPayload {
   signalTier?: 'CUC_NGON' | 'NGON';
@@ -169,6 +170,29 @@ export class TelegramService {
       );
       return false;
     }
+  }
+
+  // =========================================================================
+  // THÔNG BÁO CHÂN SÓNG SỚM (EARLY EXPANSION - SIÊU RÚT GỌN 4 DÒNG)
+  // =========================================================================
+  async sendEarlyExpansionAlert(
+    output: DetectorOutput,
+    currentPrice: number,
+  ): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${output.symbol}`;
+    const suggestedTp = currentPrice * 1.032;
+    const suggestedSl = currentPrice * 0.975;
+    const buyPct = Math.round(output.buyPressure * 100);
+    const askDepPct = Math.round(output.askDepletion * 100);
+
+    const lines: string[] = [
+      `⚡ <b>[CHÂN SÓNG] #${output.symbol}</b> (Score: <b>${output.totalScore}/100</b>)`,
+      `💵 Giá: <code>$${currentPrice}</code> | CVD Accel: <b>+${Math.round(output.cvdAcceleration)}</b> | Mua: <b>${buyPct}%</b>`,
+      `🌊 Flow: <b>${output.flowScore}/35</b> | Ask rút: <b>${askDepPct}%</b> | Vol Z: <b>+${output.volumeZ.toFixed(1)}σ</b>`,
+      `🎯 TP: <code>$${suggestedTp.toFixed(4)}</code> (+3.2%) | SL: <code>$${suggestedSl.toFixed(4)}</code> (-2.5%) | <a href="${binanceUrl}">Binance ↗</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
