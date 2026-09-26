@@ -173,7 +173,7 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO CHÂN SÓNG SỚM (EARLY EXPANSION - SIÊU RÚT GỌN 4 DÒNG)
+  // THÔNG BÁO CHÂN SÓNG SỚM (EARLY EXPANSION - SIÊU NGẮN 2 DÒNG)
   // =========================================================================
   async sendEarlyExpansionAlert(
     output: DetectorOutput,
@@ -182,13 +182,9 @@ export class TelegramService {
     const binanceUrl = `https://www.binance.com/en/futures/${output.symbol}`;
     const suggestedTp = currentPrice * 1.032;
     const suggestedSl = currentPrice * 0.975;
-    const buyPct = Math.round(output.buyPressure * 100);
-    const askDepPct = Math.round(output.askDepletion * 100);
 
     const lines: string[] = [
-      `⚡ <b>[CHÂN SÓNG] #${output.symbol}</b> (Score: <b>${output.totalScore}/100</b>)`,
-      `💵 Giá: <code>$${currentPrice}</code> | CVD Accel: <b>+${Math.round(output.cvdAcceleration)}</b> | Mua: <b>${buyPct}%</b>`,
-      `🌊 Flow: <b>${output.flowScore}/35</b> | Ask rút: <b>${askDepPct}%</b> | Vol Z: <b>+${output.volumeZ.toFixed(1)}σ</b>`,
+      `⚡ <b>[CHÂN SÓNG] #${output.symbol}</b> | Giá: <code>$${currentPrice}</code>`,
       `🎯 TP: <code>$${suggestedTp.toFixed(4)}</code> (+3.2%) | SL: <code>$${suggestedSl.toFixed(4)}</code> (-2.5%) | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
@@ -196,23 +192,14 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO TÍN HIỆU REALTIME (SIÊU RÚT GỌN - 3 DÒNG TỐI GIẢN)
+  // THÔNG BÁO TÍN HIỆU REALTIME (SIÊU NGẮN 2 DÒNG)
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const vol1mStr =
-      payload.volume1m >= 1_000_000
-        ? `${(payload.volume1m / 1_000_000).toFixed(1)}M`
-        : `${Math.round(payload.volume1m / 1000)}k`;
-    const net1mStr =
-      payload.netCashflow1m >= 1_000_000
-        ? `+${(payload.netCashflow1m / 1_000_000).toFixed(1)}M`
-        : `+${Math.round(payload.netCashflow1m / 1000)}k`;
     const change1mStr = `${payload.priceChangePct >= 0 ? '+' : ''}${payload.priceChangePct.toFixed(2)}%`;
 
     const lines: string[] = [
-      `🚀 <b>#${payload.symbol}</b> | <code>$${payload.currentPrice}</code> (<b>${change1mStr}</b>)`,
-      `🌊 Vol <code>${vol1mStr}</code> (<b>${payload.volumeMultiplier.toFixed(1)}x</b>) | Mua: <code>${net1mStr}</code> (<b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
+      `🚀 <b>#${payload.symbol}</b> | Giá: <code>$${payload.currentPrice}</code> (${change1mStr})`,
       `🎯 TP: <code>$${payload.suggestedTp1.toFixed(4)}</code> | SL: <code>$${payload.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
@@ -220,72 +207,49 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO CHỐT LỜI TP1 / TP2 (SIÊU RÚT GỌN)
+  // THÔNG BÁO CHỐT LỜI TP1 / TP2 (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     return this.sendMessage(
-      `💰 <b>[TP ${payload.targetLevel}] #${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | ${payload.suggestedAction} | <a href="${binanceUrl}">Binance ↗</a>`,
+      `💰 <b>[${payload.targetLevel}] #${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     );
   }
 
   // =========================================================================
-  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (SIÊU RÚT GỌN)
+  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendStopLossAlert(payload: StopLossAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     return this.sendMessage(
-      `🛑 <b>[SL] #${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `🛑 <b>[SL] #${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     );
   }
 
   // =========================================================================
-  // THÔNG BÁO CẢNH BÁO: SUY YẾU DÒNG TIỀN - THOÁT LỆNH (SIÊU RÚT GỌN)
+  // THÔNG BÁO CẢNH BÁO: THOÁT LỆNH (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     const pnlSign = payload.profitPct >= 0 ? '+' : '';
     return this.sendMessage(
-      `⚠️ <b>[THOÁT LỆNH] #${payload.symbol} (${pnlSign}${payload.profitPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | Sell: <b>${payload.takerSellPct.toFixed(0)}%</b> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `⚠️ <b>[THOÁT] #${payload.symbol} (${pnlSign}${payload.profitPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     );
   }
 
   // =========================================================================
-  // THÔNG BÁO BÁO CÁO DÒNG TIỀN (RÚT GỌN TOP 7)
+  // THÔNG BÁO BÁO CÁO DÒNG TIỀN (3 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendCashflowReportAlert(data: {
     inflow: Array<{ symbol: string; netInflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerBuyPct: number }>;
     outflow: Array<{ symbol: string; netOutflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerSellPct: number }>;
     strongDailyBuys?: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
   }): Promise<boolean> {
-    const timeString = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-
     const lines: string[] = [
-      `📊 <b>[BÁO CÁO DÒNG TIỀN FUTURES]</b> <i>${timeString}</i>`,
-      '🟢 <b>TOP DÒNG TIỀN VÀO (INFLOW):</b>',
+      `📊 <b>BÁO CÁO DÒNG TIỀN FUTURES</b>`,
+      `🟢 Inflow: ` + data.inflow.slice(0, 4).map(i => `#${i.symbol} (+${Math.round(i.netInflowUsdt / 1000)}k)`).join(', '),
+      `🔴 Outflow: ` + data.outflow.slice(0, 4).map(i => `#${i.symbol} (-${Math.round(i.netOutflowUsdt / 1000)}k)`).join(', '),
     ];
-
-    data.inflow.slice(0, 7).forEach((item, idx) => {
-      const netStr = `+${Math.round(item.netInflowUsdt / 1000)}k`;
-      const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-      lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${netStr}</code> (${changeStr}) | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`);
-    });
-
-    lines.push('🔴 <b>TOP DÒNG TIỀN RA (OUTFLOW):</b>');
-    data.outflow.slice(0, 7).forEach((item, idx) => {
-      const netStr = `-${Math.round(item.netOutflowUsdt / 1000)}k`;
-      const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-      lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${netStr}</code> (${changeStr}) | Sell: <b>${item.takerSellPct.toFixed(0)}%</b>`);
-    });
-
-    if (data.strongDailyBuys && data.strongDailyBuys.length > 0) {
-      lines.push('🚀 <b>LỰC MUA KHUNG 1D MẠNH:</b>');
-      data.strongDailyBuys.slice(0, 5).forEach((item, idx) => {
-        const buyVolStr = `${(item.takerBuyUsdt / 1_000_000).toFixed(1)}M`;
-        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-        lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${buyVolStr}</code> (${changeStr}) | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`);
-      });
-    }
 
     return this.sendMessage(lines.join('\n'));
   }
