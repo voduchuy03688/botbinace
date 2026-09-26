@@ -219,6 +219,32 @@ export class TelegramService {
   }
 
   // =========================================================================
+  // THÔNG BÁO CỰC NGON - BẮT CHỈNH (KÈM KHỐI LƯỢNG MUA) - SIÊU GỌN 2 DÒNG
+  // =========================================================================
+  async sendPullbackDipAlert(data: {
+    symbol: string;
+    currentPrice: number;
+    pullbackPct: number;
+    buyVolume: number;
+    takerBuyPct: number;
+    suggestedTp: number;
+    suggestedSl: number;
+  }): Promise<boolean> {
+    const binanceUrl = `https://www.binance.com/en/futures/${data.symbol}`;
+    const buyVolStr =
+      data.buyVolume >= 1_000_000
+        ? `$${(data.buyVolume / 1_000_000).toFixed(2)}M`
+        : `$${Math.round(data.buyVolume / 1000)}k`;
+
+    const lines: string[] = [
+      `💎 <b>[CỰC NGON - BẮT CHỈNH] #${data.symbol}</b> | Giá: <code>$${data.currentPrice}</code>`,
+      `🟢 Mua: <b>${buyVolStr}</b> (${data.takerBuyPct.toFixed(0)}%) | Chỉnh <b>-${data.pullbackPct.toFixed(1)}%</b> | TP: <code>$${data.suggestedTp.toFixed(4)}</code> | SL: <code>$${data.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+    ];
+
+    return this.sendMessage(lines.join('\n'));
+  }
+
+  // =========================================================================
   // THÔNG BÁO CHỐT LỜI TP1 / TP2 (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
