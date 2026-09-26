@@ -6,6 +6,7 @@ import { AppService } from './app.service.js';
 import { TelegramService } from './telegram/telegram.service.js';
 import { BinanceService } from './binance/binance.service.js';
 import { ScannerService } from './scanner/scanner.service.js';
+import { DetectorModule } from './detector/detector.module.js';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ScannerService } from './scanner/scanner.service.js';
       envFilePath: '.env',
     }),
     ScheduleModule.forRoot(),
+    DetectorModule,
   ],
   controllers: [AppController],
   providers: [AppService, TelegramService, BinanceService, ScannerService],

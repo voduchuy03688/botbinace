@@ -1,114 +1,119 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Binance Early Expansion Detector (crypto-spike-bot)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A high-performance real-time microstructure trading detector built for Binance Perpetual Futures. It detects the **exact behavioral transition** where a coin prepares to explode into an expansion wave *before* the large price candle prints.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```text
+NORMAL ➔ ACCUMULATION / ABSORPTION ➔ PRE-EXPANSION ➔ READY ➔ MICRO BREAKOUT ➔ EXPANSION
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ npm run start
+## 1. Core Architecture
 
-# watch mode
-$ npm run start:dev
+The system operates on live microsecond order-flow streams, multi-window sliding circular buffers, coin-specific rolling Z-scores, statistical change-point detection, independent score groups with strict caps, and simulated order book execution guards.
 
-# production mode
-$ npm run start:prod
+```mermaid
+flowchart TD
+    WS["Binance Futures WebSocket\n(aggTrade / depth20@100ms / bookTicker)"] --> STREAM_MGR["BinanceWsManager\n(Multi-stream Multiplexer)"]
+    STREAM_MGR --> BUFFER["TimeWindowRingBuffer & OrderBookHistoryBuffer\n(5s, 10s, 15s, 30s, 60s, 3m, 5m, 15m, 1h)"]
+    
+    BUFFER --> FLOW["FlowEngine (Max 35 pts)\n- CVD Acceleration\n- Aggressive Buy Pressure\n- Trade Frequency Burst\n- Volume Acceleration\n- P95/P99 Whale Trades"]
+    BUFFER --> LIQUIDITY["LiquidityEngine (Max 30 pts)\n- Ask Depletion (Market Buy vs Cancel)\n- Liquidity Vacuum\n- Bid Replenishment & Absorption\n- 6 Depth Bands (0.05% - 2%)\n- Spread Stability"]
+    BUFFER --> STRUCTURE["StructureEngine (Max 20 pts)\n- Volatility Compression\n- Resistance Distance\n- Micro Breakout\n- Anti-Chasing Guard (>3% pump)"]
+    BUFFER --> DERIVATIVES["DerivativesMarketEngine (Max 15 pts)\n- BTC Crash Filter\n- Relative Strength (Token - BTC)\n- OI & Short Liquidation"]
+
+    FLOW & LIQUIDITY & STRUCTURE & DERIVATIVES --> BASELINE["DynamicBaselineEngine\n(Rolling Mean, Std, MAD, Robust Z-scores)"]
+    BASELINE --> CPD["CusumChangePointDetector\n(Cumulative Sum Score 0.0 - 1.0)"]
+    
+    CPD --> SCORING["ScoringEngine\n(TOTAL_SCORE 0 - 100)"]
+    SCORING --> GUARD["Execution Guard & Anti-Spoofing\n- Simulated $10k Market Buy Slippage\n- Wall Pull / Cancel Ratio Check"]
+    
+    GUARD --> STATE["State Machine & Trigger\n- NORMAL\n- PRE_PUMP (Score 65-79)\n- READY (Score 80-88, Group Minima Passed)\n- EXPANSION ➔ SIGNAL = EXECUTE (Score >= 84 + Micro Breakout)"]
+    
+    STATE --> BACKTEST["MetricsEvaluator\n(MFE, MAE, Lead Time in seconds, Multi-horizon targets)"]
 ```
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ npm run test
+## 2. Independent Group Scores & Group Caps
 
-# e2e tests
-$ npm run test:e2e
+Correlated features are grouped together and capped to prevent multiple correlated indicators from over-inflating confidence.
 
-# test coverage
-$ npm run test:cov
+| Group | Max Score | Components & Weights |
+| :--- | :---: | :--- |
+| **FLOW** | **35** | Aggressive Buy Accel (25%), CVD Accel (25%), Trade Burst (15%), Volume Accel (15%), Large Aggressive Buys (20%) |
+| **LIQUIDITY** | **30** | Ask Depletion (30%), Liquidity Vacuum (25%), Bid Replenishment (20%), Book Imbalance (15%), Spread Stability (10%) |
+| **STRUCTURE** | **20** | Volatility Compression (25%), Resistance Distance (20%), Price Accel (20%), Micro Breakout (20%), Multi-TF Alignment (15%) |
+| **DERIVATIVES** | **10** | OI Accel (35%), Short Liquidation (30%), OI/Price Relationship (25%), Funding Context (10%) |
+| **MARKET** | **5** | BTC Regime (Bullish/Neutral vs Crash, 50%), Relative Strength (50%) |
+| **TOTAL** | **100** | Strict minimum per-group threshold required for READY/EXECUTE |
+
+---
+
+## 3. Core Behavioral Safeguards
+
+1. **Ask Depletion vs Quote Pulling (Spoofing)**:
+   - Ask depletion is only credited if backed by aggressive market buy trade volume eating the orders. If ask depth drops without trade execution, it is flagged as quote pulling (manipulation score penalization).
+2. **Anti-Chasing Guard**:
+   - If price has already pumped `> 3.0%` from base or `returns_5m >= 3%`, the entry is severely penalized to eliminate chasing the top of candles.
+3. **Simulated Slippage Execution Filter**:
+   - Simulates a market buy of $10,000 against actual order book asks. If slippage exceeds 0.35%, the signal is rejected.
+4. **BTC Crash Regime Filter**:
+   - If BTC 5m return `< -1.8%` or 1m return `< -0.9%`, all altcoin long signals are immediately rejected.
+
+---
+
+## 4. Signal Output Schema (Spec Section 50)
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "state": "EXPANSION",
+  "flowScore": 32,
+  "liquidityScore": 26,
+  "structureScore": 18,
+  "derivativeScore": 8,
+  "marketScore": 4,
+  "totalScore": 88,
+  "changePointScore": 0.85,
+  "cvdAcceleration": 500.0,
+  "buyPressure": 0.82,
+  "tradeBurst": 15.0,
+  "volumeZ": 4.2,
+  "askDepletion": 0.70,
+  "liquidityVacuum": 0.80,
+  "oiAcceleration": 1.2,
+  "shortLiquidationAcceleration": 2.1,
+  "spread": 0.02,
+  "estimatedSlippage": 0.05,
+  "manipulationScore": 0.05,
+  "probability_1pct_30s": 0.88,
+  "probability_2pct_60s": 0.79,
+  "expectedMFE": 3.08,
+  "expectedMAE": 0.45,
+  "leadTimeEstimate": 12.5,
+  "execution": "PASS",
+  "signal": "EXECUTE"
+}
 ```
 
-## Deployment
+---
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## 5. Development & Testing
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Install dependencies
+npm install
+
+# Run unit & integration tests
+npm test
+
+# Run build
+npm run build
+
+# Run linter
+npm run lint
+
+# Start server
+npm run start:dev
 ```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observer](https://observer.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).

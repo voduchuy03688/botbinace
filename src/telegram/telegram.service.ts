@@ -172,84 +172,62 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO TÍN HIỆU REALTIME (RÚT GỌN - CHỈ BÁO COIN BƠM DÒNG TIỀN & BẬT TĂNG MẠNH)
+  // THÔNG BÁO TÍN HIỆU REALTIME (SIÊU RÚT GỌN - 3 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const vol1mStr = payload.volume1m >= 1_000_000
-      ? `${(payload.volume1m / 1_000_000).toFixed(2)}M`
-      : `${Math.round(payload.volume1m / 1000)}k`;
-    const net1mStr = payload.netCashflow1m >= 1_000_000
-      ? `+${(payload.netCashflow1m / 1_000_000).toFixed(2)}M`
-      : `+${Math.round(payload.netCashflow1m / 1000)}k`;
+    const vol1mStr =
+      payload.volume1m >= 1_000_000
+        ? `${(payload.volume1m / 1_000_000).toFixed(1)}M`
+        : `${Math.round(payload.volume1m / 1000)}k`;
+    const net1mStr =
+      payload.netCashflow1m >= 1_000_000
+        ? `+${(payload.netCashflow1m / 1_000_000).toFixed(1)}M`
+        : `+${Math.round(payload.netCashflow1m / 1000)}k`;
     const change1mStr = `${payload.priceChangePct >= 0 ? '+' : ''}${payload.priceChangePct.toFixed(2)}%`;
-    const change24hStr = `${payload.change24hPct >= 0 ? '+' : ''}${payload.change24hPct.toFixed(1)}%`;
 
     const lines: string[] = [
-      `🚀 <b>${payload.symbol}</b> | <b>BƠM MẠNH DÒNG TIỀN VÀO</b>`,
-      `💵 <b>Giá:</b> <code>$${payload.currentPrice}</code> (1m: <b>${change1mStr}</b> | 24h: <b>${change24hStr}</b>)`,
-      `🌊 <b>Dòng tiền:</b> Vol <code>${vol1mStr}</code> (<b>${payload.volumeMultiplier.toFixed(1)}x</b>) | Mua ròng: <code>${net1mStr}</code> (<b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
-      `🎯 <b>Entry:</b> <code>$${payload.entryPrice}</code> | <b>TP:</b> <code>$${payload.suggestedTp1.toFixed(4)}</code> (+3.2%) | <b>SL:</b> <code>$${payload.suggestedSl.toFixed(4)}</code>`,
-      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
+      `🚀 <b>#${payload.symbol}</b> | <code>$${payload.currentPrice}</code> (<b>${change1mStr}</b>)`,
+      `🌊 Vol <code>${vol1mStr}</code> (<b>${payload.volumeMultiplier.toFixed(1)}x</b>) | Mua: <code>${net1mStr}</code> (<b>${payload.takerBuyPct1m.toFixed(0)}%</b>)`,
+      `🎯 TP: <code>$${payload.suggestedTp1.toFixed(4)}</code> | SL: <code>$${payload.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
-  // THÔNG BÁO CHỐT LỜI TP1 / TP2 (RÚT GỌN)
+  // THÔNG BÁO CHỐT LỜI TP1 / TP2 (SIÊU RÚT GỌN)
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const highestText = payload.highestPrice ? ` | Đỉnh: <code>$${payload.highestPrice}</code>` : '';
-
-    const lines: string[] = [
-      `💰 <b>[CHỐT LỜI ${payload.targetLevel}] ${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b>${highestText}`,
-      `• <b>Giá:</b> Entry <code>$${payload.entryPrice}</code> ➔ Chốt <code>$${payload.currentPrice}</code>`,
-      `• <b>Hành động:</b> <b>${payload.suggestedAction}</b>`,
-      ...(payload.reasonDetail ? [`• <i>${payload.reasonDetail}</i>`] : []),
-      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
-    ];
-
-    return this.sendMessage(lines.join('\n'));
+    return this.sendMessage(
+      `💰 <b>[TP ${payload.targetLevel}] #${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | ${payload.suggestedAction} | <a href="${binanceUrl}">Binance ↗</a>`,
+    );
   }
 
   // =========================================================================
-  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (RÚT GỌN)
+  // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (SIÊU RÚT GỌN)
   // =========================================================================
   async sendStopLossAlert(payload: StopLossAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-
-    const lines: string[] = [
-      `🛑 <b>[CẮT LỖ BẢO TOÀN VỐN] ${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b>`,
-      `• <b>Giá:</b> Entry <code>$${payload.entryPrice}</code> ➔ Thoát <code>$${payload.currentPrice}</code>`,
-      `• <b>Lý do:</b> <i>${payload.reasonText}</i>`,
-      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
-    ];
-
-    return this.sendMessage(lines.join('\n'));
+    return this.sendMessage(
+      `🛑 <b>[SL] #${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+    );
   }
 
   // =========================================================================
-  // THÔNG BÁO CẢNH BÁO: SUY YẾU DÒNG TIỀN - THOÁT LỆNH (RÚT GỌN)
+  // THÔNG BÁO CẢNH BÁO: SUY YẾU DÒNG TIỀN - THOÁT LỆNH (SIÊU RÚT GỌN)
   // =========================================================================
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     const pnlSign = payload.profitPct >= 0 ? '+' : '';
-
-    const lines: string[] = [
-      `⚠️ <b>[DÒNG TIỀN SUY YẾU - THOÁT LỆNH] ${payload.symbol}</b>`,
-      `• <b>Vị thế:</b> <b>${pnlSign}${payload.profitPct.toFixed(2)}%</b> (Entry: <code>$${payload.entryPrice}</code> ➔ Thoát: <code>$${payload.currentPrice}</code>)`,
-      `• <b>Dòng tiền bán:</b> Taker Sell <b>${payload.takerSellPct.toFixed(1)}%</b> | Rút ròng: <code>-${Math.round(Math.abs(payload.netCashflowSell)).toLocaleString()} USDT</code>`,
-      `• <b>Lý do:</b> <i>${payload.reasonText}</i>`,
-      `🔗 <a href="${binanceUrl}">Binance Futures</a>`,
-    ];
-
-    return this.sendMessage(lines.filter(Boolean).join('\n'));
+    return this.sendMessage(
+      `⚠️ <b>[THOÁT LỆNH] #${payload.symbol} (${pnlSign}${payload.profitPct.toFixed(2)}%)</b>\n• Giá: <code>$${payload.entryPrice}</code> ➔ <code>$${payload.currentPrice}</code> | Sell: <b>${payload.takerSellPct.toFixed(0)}%</b> | <a href="${binanceUrl}">Binance ↗</a>`,
+    );
   }
 
   // =========================================================================
-  // THÔNG BÁO BÁO CÁO DÒNG TIỀN VÀO, DÒNG TIỀN RA & COIN LỰC MUA MẠNH KHUNG 1D (GỬI LÚC 00:00 VÀ 12:00)
+  // THÔNG BÁO BÁO CÁO DÒNG TIỀN (RÚT GỌN TOP 7)
   // =========================================================================
   async sendCashflowReportAlert(data: {
     inflow: Array<{ symbol: string; netInflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerBuyPct: number }>;
@@ -259,53 +237,31 @@ export class TelegramService {
     const timeString = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 
     const lines: string[] = [
-      '📊 🌊 <b>[BÁO CÁO DÒNG TIỀN & LỰC MUA MẠNH KHUNG 1D BINANCE FUTURES]</b>',
-      `⏰ <b>Thời gian:</b> <i>${timeString}</i>`,
-      '----------------------------------------',
-      '🟢 <b>TOP 15 COIN DÒNG TIỀN VÀO MẠNH NHẤT (NET INFLOW):</b>',
+      `📊 <b>[BÁO CÁO DÒNG TIỀN FUTURES]</b> <i>${timeString}</i>`,
+      '🟢 <b>TOP DÒNG TIỀN VÀO (INFLOW):</b>',
     ];
 
-    if (data.inflow.length === 0) {
-      lines.push('<i>Khởi tạo chưa ghi nhận coin đạt tiêu chuẩn dòng tiền vào.</i>');
-    } else {
-      data.inflow.forEach((item, idx) => {
-        const netStr = `+${Math.round(item.netInflowUsdt / 1000).toLocaleString()}k USDT`;
-        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-        lines.push(
-          `${idx + 1}. <b>${item.symbol}</b> | Mua ròng: <code>${netStr}</code> | 24h: <b>${changeStr}</b> | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`,
-        );
-      });
-    }
+    data.inflow.slice(0, 7).forEach((item, idx) => {
+      const netStr = `+${Math.round(item.netInflowUsdt / 1000)}k`;
+      const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
+      lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${netStr}</code> (${changeStr}) | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`);
+    });
 
-    lines.push('----------------------------------------');
-    lines.push('🔴 <b>TOP 15 COIN DÒNG TIỀN RA MẠNH NHẤT (NET OUTFLOW):</b>');
-
-    if (data.outflow.length === 0) {
-      lines.push('<i>Khởi tạo chưa ghi nhận coin đạt tiêu chuẩn dòng tiền ra.</i>');
-    } else {
-      data.outflow.forEach((item, idx) => {
-        const netStr = `-${Math.round(item.netOutflowUsdt / 1000).toLocaleString()}k USDT`;
-        const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-        lines.push(
-          `${idx + 1}. <b>${item.symbol}</b> | Bán ròng: <code>${netStr}</code> | 24h: <b>${changeStr}</b> | Sell: <b>${item.takerSellPct.toFixed(0)}%</b>`,
-        );
-      });
-    }
+    lines.push('🔴 <b>TOP DÒNG TIỀN RA (OUTFLOW):</b>');
+    data.outflow.slice(0, 7).forEach((item, idx) => {
+      const netStr = `-${Math.round(item.netOutflowUsdt / 1000)}k`;
+      const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
+      lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${netStr}</code> (${changeStr}) | Sell: <b>${item.takerSellPct.toFixed(0)}%</b>`);
+    });
 
     if (data.strongDailyBuys && data.strongDailyBuys.length > 0) {
-      lines.push('----------------------------------------');
-      lines.push('🚀 🚀 <b>TOP COIN CÓ LỰC MUA MẠNH TRONG NẾN 1 NGÀY (KHUNG 1D):</b>');
-      data.strongDailyBuys.forEach((item, idx) => {
-        const buyVolStr = `${Math.round(item.takerBuyUsdt / 1_000_000).toFixed(1)}M USDT`;
+      lines.push('🚀 <b>LỰC MUA KHUNG 1D MẠNH:</b>');
+      data.strongDailyBuys.slice(0, 5).forEach((item, idx) => {
+        const buyVolStr = `${(item.takerBuyUsdt / 1_000_000).toFixed(1)}M`;
         const changeStr = `${item.priceChangePct >= 0 ? '+' : ''}${item.priceChangePct.toFixed(1)}%`;
-        lines.push(
-          `${idx + 1}. <b>${item.symbol}</b> | Mua 1D: <code>${buyVolStr}</code> | 24h: <b>${changeStr}</b> | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`,
-        );
+        lines.push(`${idx + 1}. <b>#${item.symbol}</b>: <code>${buyVolStr}</code> (${changeStr}) | Buy: <b>${item.takerBuyPct.toFixed(0)}%</b>`);
       });
     }
-
-    lines.push('----------------------------------------');
-    lines.push('💡 <i>Tự động cập nhật 2 lần/ngày (lúc 12:00 và 00:00).</i>');
 
     return this.sendMessage(lines.join('\n'));
   }
