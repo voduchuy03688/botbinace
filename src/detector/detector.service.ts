@@ -302,14 +302,19 @@ export class DetectorService
         const currentPrice = tradeBuffer ? tradeBuffer.getLatestPrice() : 0;
         if (currentPrice <= 0) continue;
 
+        const agg = tradeBuffer
+          ? tradeBuffer.getAggregatesForWindow(60_000, 10_000, now)
+          : null;
+        const buyVol = agg ? agg.buyQuoteVolume : 0;
+
         this.symbolCooldowns.set(output.symbol, now);
         this.lastGlobalAlertTime = now;
 
         this.logger.log(
-          `⚡ [CHÂN SÓNG PHÁT HIỆN: ${output.symbol}] Score: ${output.totalScore}/100 | Giá: ${currentPrice} | CVD Accel: +${Math.round(output.cvdAcceleration)}`,
+          `💎 [CỰC NGON: ${output.symbol}] Score: ${output.totalScore}/100 | Giá: ${currentPrice} | Mua 60s: $${Math.round(buyVol)}`,
         );
 
-        await this.telegramService.sendEarlyExpansionAlert(output, currentPrice);
+        await this.telegramService.sendEarlyExpansionAlert(output, currentPrice, buyVol);
       }
     } catch (err: any) {
       this.logger.error(`Error in realtime expansion scan: ${err.message}`);
