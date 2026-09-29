@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { DetectorOutput } from '../detector/types/detector-output.types.js';
+import { CashflowReportData } from '../binance/binance.service.js';
 
 export interface VipSpikeAlertPayload {
   signalTier?: 'CUC_NGON' | 'NGON';
@@ -285,18 +286,68 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO BÁO CÁO DÒNG TIỀN (3 DÒNG TỐI GIẢN)
+  // THÔNG BÁO BÁO CÁO DÒNG TIỀN 12H (BTC & COIN RÁC / MEME COIN)
   // =========================================================================
-  async sendCashflowReportAlert(data: {
-    inflow: Array<{ symbol: string; netInflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerBuyPct: number }>;
-    outflow: Array<{ symbol: string; netOutflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerSellPct: number }>;
-    strongDailyBuys?: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
-  }): Promise<boolean> {
+  async sendCashflowReportAlert(data: CashflowReportData): Promise<boolean> {
+    const formatMoney = (val: number): string => {
+      const abs = Math.abs(val);
+      if (abs >= 1_000_000) return `$${(abs / 1_000_000).toFixed(2)}M`;
+      if (abs >= 1_000) return `$${Math.round(abs / 1_000)}k`;
+      return `$${Math.round(abs)}`;
+    };
+
     const lines: string[] = [
-      `📊 <b>BÁO CÁO DÒNG TIỀN FUTURES</b>`,
-      `🟢 Inflow: ` + data.inflow.slice(0, 4).map(i => `#${i.symbol} (+${Math.round(i.netInflowUsdt / 1000)}k)`).join(', '),
-      `🔴 Outflow: ` + data.outflow.slice(0, 4).map(i => `#${i.symbol} (-${Math.round(i.netOutflowUsdt / 1000)}k)`).join(', '),
+      `📊 <b>BÁO CÁO DÒNG TIỀN 12H (BTC & LOWCAP / MEME COIN)</b>`,
+      `⏰ <i>Khung: 12 Giờ qua | Chu kỳ: 12h/lần</i>`,
+      '',
     ];
+
+    if (data.btc) {
+      const btc = data.btc;
+      const btcSign = btc.priceChangePct >= 0 ? '+' : '';
+      const btcFlowSign = btc.netInflowUsdt >= 0 ? '+' : '-';
+      const btcState =
+        btc.netInflowUsdt > 0
+          ? '🟢 Gom ròng (Inflow)'
+          : '🔴 Xả ròng (Outflow)';
+      const btcUrl = `https://www.binance.com/en/futures/BTCUSDT`;
+
+      lines.push(
+        `👑 <b>ANH CẢ BITCOIN (#BTCUSDT):</b>`,
+        `• Giá: <code>$${btc.currentPrice.toLocaleString('en-US')}</code> (${btcSign}${btc.priceChangePct.toFixed(2)}%)`,
+        `• Dòng tiền 12h: <b>${btcFlowSign}${formatMoney(btc.netInflowUsdt)}</b> (Mua: ${btc.takerBuyPct.toFixed(1)}%)`,
+        `• Trạng thái: ${btcState} | <a href="${btcUrl}">Binance ↗</a>`,
+        '',
+      );
+    }
+
+    lines.push(`🟢 <b>TOP DÒNG TIỀN VÀO (GOM HÀNG 12H - COIN RÁC & MEME):</b>`);
+    if (!data.inflow || data.inflow.length === 0) {
+      lines.push('<i>Chưa ghi nhận coin có dòng tiền gom đột biến.</i>');
+    } else {
+      data.inflow.slice(0, 10).forEach((item, index) => {
+        const sign = item.priceChangePct >= 0 ? '+' : '';
+        const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.netInflowUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | 12h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        );
+      });
+    }
+
+    lines.push('');
+    lines.push(`🔴 <b>TOP DÒNG TIỀN RA (XẢ HÀNG / RÚT VỐN 12H):</b>`);
+    if (!data.outflow || data.outflow.length === 0) {
+      lines.push('<i>Chưa ghi nhận coin có dòng tiền xả mạnh đột biến.</i>');
+    } else {
+      data.outflow.slice(0, 10).forEach((item, index) => {
+        const sign = item.priceChangePct >= 0 ? '+' : '';
+        const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        const sellPct = 100 - item.takerBuyPct;
+        lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>-${formatMoney(item.netInflowUsdt)}</b> (Bán: ${sellPct.toFixed(0)}%) | 12h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        );
+      });
+    }
 
     return this.sendMessage(lines.join('\n'));
   }

@@ -32,6 +32,49 @@ export interface TickerVelocityData {
   timestamp: number;
 }
 
+export interface CashflowReportItem {
+  symbol: string;
+  netInflowUsdt: number;
+  volumeUsdt: number;
+  priceChangePct: number;
+  takerBuyPct: number;
+  currentPrice: number;
+}
+
+export interface CashflowReportData {
+  btc: CashflowReportItem | null;
+  inflow: CashflowReportItem[];
+  outflow: CashflowReportItem[];
+}
+
+// Danh sách token vốn hóa lớn, vừa, chứng khoán và stablecoin cần loại trừ
+// CHỈ GIỮ LẠI: Bitcoin (BTCUSDT) và toàn bộ các coin rác (shitcoins), vốn hóa nhỏ (low-cap), meme coin
+export const EXCLUDED_MAJOR_MID_CAPS = new Set([
+  // Vốn hóa lớn (Major Caps)
+  'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'AVAXUSDT',
+  'DOGEUSDT', 'DOTUSDT', 'LINKUSDT', 'NEARUSDT', 'SUIUSDT', 'TONUSDT',
+  'TRXUSDT', 'LTCUSDT', 'BCHUSDT', 'POLUSDT', 'MATICUSDT',
+  // Vốn hóa vừa (Mid Caps)
+  'APTUSDT', 'ARBUSDT', 'OPUSDT', 'ATOMUSDT', 'ETCUSDT', 'FILUSDT',
+  'ICPUSDT', 'XLMUSDT', 'HBARUSDT', 'TIAUSDT', 'RENDERUSDT', 'INJUSDT',
+  'FETUSDT', 'STXUSDT', 'UNIUSDT', 'AAVEUSDT', 'MKRUSDT', 'CRVUSDT',
+  'LDOUSDT', 'ALGOUSDT', 'VETUSDT', 'SANDUSDT', 'MANAUSDT', 'AXSUSDT',
+  'THETAUSDT', 'FTMUSDT', 'DYDXUSDT', 'SEIUSDT', 'FLOWUSDT', 'EOSUSDT',
+  'KAVAUSDT', 'GALAUSDT', 'QNTUSDT', 'CHZUSDT', 'APEUSDT', 'PYTHUSDT',
+  'JUPUSDT', 'STRKUSDT', 'WLDUSDT', 'TAOUSDT', 'PENDLEUSDT', 'OMUSDT',
+  'ENAUSDT', 'RUNEUSDT', 'SNXUSDT', 'GRTUSDT', 'DYMUSDT', 'RONINUSDT',
+  'EGLDUSDT', 'IMXUSDT', 'ZECUSDT', 'DASHUSDT', 'NEOUSDT', 'IOTAUSDT',
+  'XTZUSDT', 'KAIAUSDT', 'CFXUSDT', 'MINAUSDT', 'ENSUSDT', 'ORDIUSDT',
+  // Cổ phiếu & ETF phái sinh (Equities / Stocks / ETFs)
+  'TSLAUSDT', 'INTCUSDT', 'HOODUSDT', 'MSTRUSDT', 'AMZNUSDT', 'COINUSDT',
+  'PLTRUSDT', 'METAUSDT', 'NVDAUSDT', 'GOOGLUSDT', 'QQQUSDT', 'SPYUSDT',
+  'AAPLUSDT', 'MUUSDT', 'MSFTUSDT', 'AVGOUSDT', 'BABAUSDT', 'AMDUSDT',
+  'SOXLUSDT', 'ARMUSDT', 'SKHYNIXUSDT',
+  // Stablecoins & Chỉ số tổng hợp
+  'USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT', 'BTCDOMUSDT', 'DEFIUSDT',
+  'FOOTBALLUSDT',
+]);
+
 @Injectable()
 export class BinanceService {
   private readonly logger = new Logger(BinanceService.name);
@@ -224,54 +267,69 @@ export class BinanceService {
     }
   }
 
-  // Lấy báo cáo Top coin có dòng tiền vào (net inflow), dòng tiền ra (net outflow), và Coin Lực Mua Mạnh Khung 1 Ngày (1D)
-  async getCashflowReport(): Promise<{
-    inflow: Array<{ symbol: string; netInflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerBuyPct: number }>;
-    outflow: Array<{ symbol: string; netOutflowUsdt: number; volumeUsdt: number; priceChangePct: number; takerSellPct: number }>;
-    strongDailyBuys: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
-  }> {
-    const eligibleTickers = this.getEligibleMoversPool(2_000_000, -50.0, 200.0);
-    const results: Array<{
-      symbol: string;
-      netInflowUsdt: number;
-      volumeUsdt: number;
-      priceChangePct: number;
-      takerBuyPct: number;
-      dailyTakerBuyUsdt: number;
-      dailyTakerBuyPct: number;
-    }> = [];
 
-    // Lấy song song theo từng batch
-    const batchSize = 20;
+  // Lấy báo cáo dòng tiền 12h: BTC và Top coin rác / vốn hóa nhỏ / meme coin gom hàng hoặc xả hàng
+  async getCashflowReport(): Promise<CashflowReportData> {
+    // 1. Phân tích riêng cho Bitcoin (#BTCUSDT) trong 12h
+    let btcItem: CashflowReportItem | null = null;
+    try {
+      const btcKlines = await this.getKlines('BTCUSDT', '1h', 12);
+      if (btcKlines && btcKlines.length > 0) {
+        const totalVol = btcKlines.reduce((s, k) => s + k.quoteVolume, 0);
+        const takerBuy = btcKlines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+        const takerSell = Math.max(0, totalVol - takerBuy);
+        const first = btcKlines[0];
+        const last = btcKlines[btcKlines.length - 1];
+        const priceChangePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
+
+        btcItem = {
+          symbol: 'BTCUSDT',
+          netInflowUsdt: takerBuy - takerSell,
+          volumeUsdt: totalVol,
+          priceChangePct,
+          takerBuyPct: totalVol > 0 ? (takerBuy / totalVol) * 100 : 50,
+          currentPrice: last.close,
+        };
+      }
+    } catch (err: any) {
+      this.logger.error(`Lỗi lấy dữ liệu 12h BTC: ${err.message}`);
+    }
+
+    // 2. Lấy danh sách coin rác / low-cap / meme coin (loại trừ BTC & coin lớn/vừa)
+    const eligibleTickers = this.getEligibleMoversPool(1_500_000, -80.0, 500.0)
+      .filter((t) => t.symbol !== 'BTCUSDT' && !EXCLUDED_MAJOR_MID_CAPS.has(t.symbol));
+
+    const results: CashflowReportItem[] = [];
+
+    // Lấy song song theo từng batch 25 coin
+    const batchSize = 25;
     for (let i = 0; i < eligibleTickers.length; i += batchSize) {
       const batch = eligibleTickers.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async (t) => {
-          // 4 nến 15m (1h)
-          const klines15m = await this.getKlines(t.symbol, '15m', 4);
-          if (!klines15m || klines15m.length === 0) return null;
+          // Lấy 12 nến 1h để tính chuẩn xác dòng tiền 12h
+          const klines12h = await this.getKlines(t.symbol, '1h', 12);
+          if (!klines12h || klines12h.length < 3) return null;
 
-          const totalVol = klines15m.reduce((s, k) => s + k.quoteVolume, 0);
-          const takerBuy = klines15m.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+          const totalVol = klines12h.reduce((s, k) => s + k.quoteVolume, 0);
+          if (totalVol < 200_000) return null; // Bỏ qua token không có giao dịch đáng kể
+
+          const takerBuy = klines12h.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
           const takerSell = Math.max(0, totalVol - takerBuy);
           const netInflowUsdt = takerBuy - takerSell;
           const takerBuyPct = totalVol > 0 ? (takerBuy / totalVol) * 100 : 50;
 
-          // Nến 1 Ngày (1d) để tìm coin lực mua mạnh khung 1D chuẩn bị bay
-          const klines1d = await this.getKlines(t.symbol, '1d', 2);
-          const current1d = klines1d && klines1d.length > 0 ? klines1d[klines1d.length - 1] : null;
-          const dailyTakerBuyUsdt = current1d ? current1d.takerBuyQuoteVolume : 0;
-          const dailyTotalVol = current1d ? current1d.quoteVolume : 0;
-          const dailyTakerBuyPct = dailyTotalVol > 0 ? (dailyTakerBuyUsdt / dailyTotalVol) * 100 : 50;
+          const first = klines12h[0];
+          const last = klines12h[klines12h.length - 1];
+          const priceChangePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
 
           return {
             symbol: t.symbol,
             netInflowUsdt,
             volumeUsdt: totalVol,
-            priceChangePct: t.priceChangePercent,
+            priceChangePct,
             takerBuyPct,
-            dailyTakerBuyUsdt,
-            dailyTakerBuyPct,
+            currentPrice: last.close,
           };
         }),
       );
@@ -281,36 +339,19 @@ export class BinanceService {
       }
     }
 
-    // Top Dòng tiền vào (Net Inflow > 0)
+    // Top Dòng tiền vào (Gom hàng 12h: Net Inflow > 0 và Taker Buy >= 50%)
     const inflow = [...results]
-      .filter((r) => r.netInflowUsdt > 0)
+      .filter((r) => r.netInflowUsdt > 0 && r.takerBuyPct >= 50)
       .sort((a, b) => b.netInflowUsdt - a.netInflowUsdt)
-      .slice(0, 15);
+      .slice(0, 10);
 
-    // Top Dòng tiền ra (Net Outflow: netInflowUsdt < 0)
+    // Top Dòng tiền ra (Xả hàng / rút vốn 12h: Net Inflow < 0 và Taker Buy <= 50%)
     const outflow = [...results]
-      .filter((r) => r.netInflowUsdt < 0)
-      .map((r) => ({
-        ...r,
-        netOutflowUsdt: Math.abs(r.netInflowUsdt),
-        takerSellPct: 100 - r.takerBuyPct,
-      }))
-      .sort((a, b) => b.netOutflowUsdt - a.netOutflowUsdt)
-      .slice(0, 15);
+      .filter((r) => r.netInflowUsdt < 0 && r.takerBuyPct <= 50)
+      .sort((a, b) => a.netInflowUsdt - b.netInflowUsdt) // Âm nhiều nhất xếp đầu (lực xả lớn nhất)
+      .slice(0, 10);
 
-    // Top Coin Lực Mua Mạnh Trong Nến 1 Ngày (1D)
-    const strongDailyBuys = [...results]
-      .filter((r) => r.dailyTakerBuyPct >= 58 && r.dailyTakerBuyUsdt >= 3_000_000)
-      .sort((a, b) => b.dailyTakerBuyUsdt - a.dailyTakerBuyUsdt)
-      .map((r) => ({
-        symbol: r.symbol,
-        takerBuyUsdt: r.dailyTakerBuyUsdt,
-        priceChangePct: r.priceChangePct,
-        takerBuyPct: r.dailyTakerBuyPct,
-      }))
-      .slice(0, 15);
-
-    return { inflow, outflow, strongDailyBuys };
+    return { btc: btcItem, inflow, outflow };
   }
 }
 

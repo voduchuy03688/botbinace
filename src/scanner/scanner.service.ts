@@ -44,6 +44,16 @@ export class ScannerService implements OnApplicationBootstrap {
     this.logger.log('Khởi tạo Scanner: TỰ ĐỘNG BẮT ĐÚNG THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY WAVE BREAKOUT)...');
     await this.refreshMarketData();
     this.logger.log('Scanner hoạt động: Quét đa khung giờ toàn bộ Futures, bắt trúng chân sóng dòng tiền lớn.');
+
+    // Bắn 1 báo cáo dòng tiền 12h sau 10s khởi động để kiểm tra và thông báo ngay
+    setTimeout(async () => {
+      try {
+        this.logger.log('Khởi chạy báo cáo dòng tiền 12h khởi động ban đầu...');
+        await this.handleScheduledCashflowReport();
+      } catch (err: any) {
+        this.logger.warn(`Lỗi báo cáo dòng tiền khởi động: ${err.message}`);
+      }
+    }, 10000);
   }
 
   // Cập nhật dữ liệu Ticker 24h định kỳ mỗi 2 phút (dự phòng)
@@ -52,15 +62,15 @@ export class ScannerService implements OnApplicationBootstrap {
     await this.binanceService.refreshTickers24h();
   }
 
-  // Gửi Báo cáo Dòng Tiền Định Kỳ 2 lần mỗi ngày (vào lúc 00:00 và 12:00)
-  @Cron('0 0 0,12 * * *')
+  // Gửi Báo cáo Dòng Tiền Định Kỳ 12 tiếng / lần (vào lúc 00:00 và 12:00 giờ Việt Nam)
+  @Cron('0 0 0,12 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async handleScheduledCashflowReport() {
-    this.logger.log('Đang khởi tạo báo cáo dòng tiền định kỳ thị trường (12h/00h)...');
+    this.logger.log('Đang khởi tạo báo cáo dòng tiền 12h thị trường (BTC & Coin Rác / LowCap / Meme)...');
     try {
       await this.binanceService.refreshTickers24h();
       const report = await this.binanceService.getCashflowReport();
       await this.telegramService.sendCashflowReportAlert(report);
-      this.logger.log('Đã gửi báo cáo dòng tiền thành công tới Telegram!');
+      this.logger.log('Đã gửi báo cáo dòng tiền 12h thành công tới Telegram!');
     } catch (err: any) {
       this.logger.error(`Lỗi khi tạo báo cáo dòng tiền: ${err.message}`);
     }
