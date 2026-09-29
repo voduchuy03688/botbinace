@@ -44,16 +44,6 @@ export class ScannerService implements OnApplicationBootstrap {
     this.logger.log('Khởi tạo Scanner: TỰ ĐỘNG BẮT ĐÚNG THỜI ĐIỂM BẮT ĐẦU SÓNG TĂNG (EARLY WAVE BREAKOUT)...');
     await this.refreshMarketData();
     this.logger.log('Scanner hoạt động: Quét đa khung giờ toàn bộ Futures, bắt trúng chân sóng dòng tiền lớn.');
-
-    // Bắn 1 báo cáo dòng tiền 12h sau 10s khởi động để kiểm tra và thông báo ngay
-    setTimeout(async () => {
-      try {
-        this.logger.log('Khởi chạy báo cáo dòng tiền 12h khởi động ban đầu...');
-        await this.handleScheduledCashflowReport();
-      } catch (err: any) {
-        this.logger.warn(`Lỗi báo cáo dòng tiền khởi động: ${err.message}`);
-      }
-    }, 10000);
   }
 
   // Cập nhật dữ liệu Ticker 24h định kỳ mỗi 2 phút (dự phòng)

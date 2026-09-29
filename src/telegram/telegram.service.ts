@@ -349,6 +349,18 @@ export class TelegramService {
       });
     }
 
+    if (data.strongDailyBuys && data.strongDailyBuys.length > 0) {
+      lines.push('');
+      lines.push(`🔥 <b>TOP COIN LỰC MUA MẠNH KHUNG 1D:</b>`);
+      data.strongDailyBuys.slice(0, 5).forEach((item, index) => {
+        const sign = item.priceChangePct >= 0 ? '+' : '';
+        const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.takerBuyUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | 24h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        );
+      });
+    }
+
     return this.sendMessage(lines.join('\n'));
   }
 }

@@ -45,6 +45,7 @@ export interface CashflowReportData {
   btc: CashflowReportItem | null;
   inflow: CashflowReportItem[];
   outflow: CashflowReportItem[];
+  strongDailyBuys?: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
 }
 
 // Danh sách token vốn hóa lớn, vừa, chứng khoán và stablecoin cần loại trừ
@@ -299,7 +300,7 @@ export class BinanceService {
     const eligibleTickers = this.getEligibleMoversPool(1_500_000, -80.0, 500.0)
       .filter((t) => t.symbol !== 'BTCUSDT' && !EXCLUDED_MAJOR_MID_CAPS.has(t.symbol));
 
-    const results: CashflowReportItem[] = [];
+    const results: Array<CashflowReportItem & { dailyTakerBuyUsdt?: number; dailyTakerBuyPct?: number }> = [];
 
     // Lấy song song theo từng batch 25 coin
     const batchSize = 25;
@@ -323,6 +324,13 @@ export class BinanceService {
           const last = klines12h[klines12h.length - 1];
           const priceChangePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
 
+          // Nến 1 Ngày (1d) để tìm coin lực mua mạnh khung 1D chuẩn bị bay (bảo toàn logic cũ)
+          const klines1d = await this.getKlines(t.symbol, '1d', 2);
+          const current1d = klines1d && klines1d.length > 0 ? klines1d[klines1d.length - 1] : null;
+          const dailyTakerBuyUsdt = current1d ? current1d.takerBuyQuoteVolume : 0;
+          const dailyTotalVol = current1d ? current1d.quoteVolume : 0;
+          const dailyTakerBuyPct = dailyTotalVol > 0 ? (dailyTakerBuyUsdt / dailyTotalVol) * 100 : 50;
+
           return {
             symbol: t.symbol,
             netInflowUsdt,
@@ -330,6 +338,8 @@ export class BinanceService {
             priceChangePct,
             takerBuyPct,
             currentPrice: last.close,
+            dailyTakerBuyUsdt,
+            dailyTakerBuyPct,
           };
         }),
       );
@@ -351,7 +361,19 @@ export class BinanceService {
       .sort((a, b) => a.netInflowUsdt - b.netInflowUsdt) // Âm nhiều nhất xếp đầu (lực xả lớn nhất)
       .slice(0, 10);
 
-    return { btc: btcItem, inflow, outflow };
+    // Top Coin Lực Mua Mạnh Trong Nến 1 Ngày (1D) (bảo toàn logic cũ)
+    const strongDailyBuys = [...results]
+      .filter((r) => (r.dailyTakerBuyPct || 0) >= 58 && (r.dailyTakerBuyUsdt || 0) >= 3_000_000)
+      .sort((a, b) => (b.dailyTakerBuyUsdt || 0) - (a.dailyTakerBuyUsdt || 0))
+      .map((r) => ({
+        symbol: r.symbol,
+        takerBuyUsdt: r.dailyTakerBuyUsdt || 0,
+        priceChangePct: r.priceChangePct,
+        takerBuyPct: r.dailyTakerBuyPct || 50,
+      }))
+      .slice(0, 10);
+
+    return { btc: btcItem, inflow, outflow, strongDailyBuys };
   }
 }
 
