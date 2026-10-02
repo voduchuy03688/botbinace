@@ -52,62 +52,60 @@ export class ScannerService implements OnApplicationBootstrap {
     await this.binanceService.refreshTickers24h();
   }
 
-  // 1. Báo cáo Dòng Tiền & Đột Biến Mua Định Kỳ 2H (Mỗi 2 tiếng: 00:00, 02:00, 04:00, ...)
-  @Cron('0 0 */2 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
-  async handleScheduled2hReport() {
-    this.logger.log('Đang khởi tạo báo cáo dòng tiền & đột biến thanh khoản 2H (Top 20)...');
-    try {
-      await this.binanceService.refreshTickers24h();
-      const report = await this.binanceService.getCashflowReport(2, 20);
-      await this.telegramService.sendCashflowReportAlert(report);
-      this.logger.log('Đã gửi báo cáo dòng tiền 2H thành công tới Telegram!');
-    } catch (err: any) {
-      this.logger.error(`Lỗi khi tạo báo cáo dòng tiền 2H: ${err.message}`);
-    }
-  }
-
-  // 2. Báo cáo Dòng Tiền & Đột Biến Mua Định Kỳ 4H (Mỗi 4 tiếng: 00:01, 04:01, 08:01, 12:01, ...)
-  // (Lùi 1 phút để tránh nghẽn tải API đồng thời với chu kỳ 2h)
-  @Cron('0 1 */4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // 1. Báo cáo Cá Voi Gom Hàng Định Kỳ 4H (Cứ 4 tiếng 1 lần: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+  @Cron('0 0 */4 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async handleScheduled4hReport() {
-    this.logger.log('Đang khởi tạo báo cáo dòng tiền & đột biến thanh khoản 4H (Top 20)...');
+    this.logger.log('Đang khởi tạo báo cáo Cá Voi Gom Hàng 4H (Top 20)...');
     try {
       await this.binanceService.refreshTickers24h();
       const report = await this.binanceService.getCashflowReport(4, 20);
       await this.telegramService.sendCashflowReportAlert(report);
-      this.logger.log('Đã gửi báo cáo dòng tiền 4H thành công tới Telegram!');
+      this.logger.log('Đã gửi báo cáo Cá Voi Gom Hàng 4H thành công tới Telegram!');
     } catch (err: any) {
-      this.logger.error(`Lỗi khi tạo báo cáo dòng tiền 4H: ${err.message}`);
+      this.logger.error(`Lỗi khi tạo báo cáo Cá Voi Gom Hàng 4H: ${err.message}`);
     }
   }
 
-  // 3. Báo cáo Dòng Tiền & Đột Biến Mua Định Kỳ 12H (Mỗi 12 tiếng: 00:02 và 12:02)
-  // (Lùi 2 phút để xử lý tuần tự mượt mà)
-  @Cron('0 2 0,12 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
+  // 2. Báo cáo Cá Voi Gom Hàng Định Kỳ 12H (Cứ 12 tiếng 1 lần: 00:01 và 12:01)
+  @Cron('0 1 0,12 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async handleScheduled12hReport() {
-    this.logger.log('Đang khởi tạo báo cáo dòng tiền & đột biến thanh khoản 12H (Top 20)...');
+    this.logger.log('Đang khởi tạo báo cáo Cá Voi Gom Hàng 12H (Top 20)...');
     try {
       await this.binanceService.refreshTickers24h();
       const report = await this.binanceService.getCashflowReport(12, 20);
       await this.telegramService.sendCashflowReportAlert(report);
-      this.logger.log('Đã gửi báo cáo dòng tiền 12H thành công tới Telegram!');
+      this.logger.log('Đã gửi báo cáo Cá Voi Gom Hàng 12H thành công tới Telegram!');
     } catch (err: any) {
-      this.logger.error(`Lỗi khi tạo báo cáo dòng tiền 12H: ${err.message}`);
+      this.logger.error(`Lỗi khi tạo báo cáo Cá Voi Gom Hàng 12H: ${err.message}`);
     }
   }
 
-  // 4. Báo cáo Dòng Tiền & Đột Biến Mua Định Kỳ 1 NGÀY (Mỗi ngày lúc 07:00 sáng giờ VN - chốt nến 1D)
+  // 3. Báo cáo Cá Voi Gom Hàng Định Kỳ 1 NGÀY (Cứ 1 ngày 1 lần: 07:00 sáng chốt nến 1D Binance)
   @Cron('0 0 7 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async handleScheduledDailyReport() {
-    this.logger.log('Đang khởi tạo báo cáo dòng tiền & đột biến thanh khoản 1 NGÀY (Top 20)...');
+    this.logger.log('Đang khởi tạo báo cáo Cá Voi Gom Hàng 1 NGÀY (Top 20)...');
     try {
       await this.binanceService.refreshTickers24h();
       const report = await this.binanceService.getCashflowReport(24, 20);
       await this.telegramService.sendCashflowReportAlert(report);
-      this.logger.log('Đã gửi báo cáo dòng tiền 1 NGÀY thành công tới Telegram!');
+      this.logger.log('Đã gửi báo cáo Cá Voi Gom Hàng 1 NGÀY thành công tới Telegram!');
     } catch (err: any) {
-      this.logger.error(`Lỗi khi tạo báo cáo dòng tiền 1 NGÀY: ${err.message}`);
+      this.logger.error(`Lỗi khi tạo báo cáo Cá Voi Gom Hàng 1 NGÀY: ${err.message}`);
     }
+  }
+
+  // Phương thức kích hoạt báo cáo thủ công theo yêu cầu
+  async triggerManualReport(tf = 4) {
+    this.logger.log(`Kích hoạt báo cáo Cá Voi Gom Hàng thủ công (${tf}H)...`);
+    await this.binanceService.refreshTickers24h();
+    const report = await this.binanceService.getCashflowReport(tf, 20);
+    const success = await this.telegramService.sendCashflowReportAlert(report);
+    return {
+      success,
+      tf,
+      topWhaleAccumulationCount: report.suddenSpikes.length,
+      sampleTokens: report.suddenSpikes.slice(0, 5).map((s) => s.symbol),
+    };
   }
 
 

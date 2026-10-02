@@ -317,7 +317,7 @@ export class TelegramService {
   // THÔNG BÁO BÁO CÁO DÒNG TIỀN & ĐỘT BIẾN THANH KHOẢN (TOP 20)
   // =========================================================================
   async sendCashflowReportAlert(data: CashflowReportData): Promise<boolean> {
-    const tf = data.timeframeHours || 2;
+    const tf = data.timeframeHours || 4;
     const topLimit = data.topLimit || 20;
     const tfLabel = tf === 24 ? '1 NGÀY' : `${tf}H`;
 
@@ -328,11 +328,17 @@ export class TelegramService {
       return `$${Math.round(abs)}`;
     };
 
-    // PHẦN 1: BÁO CÁO BTC & TOP ĐỘT BIẾN THANH KHOẢN MUA
+    // PHẦN 1: DẤU HIỆU CÁ VOI GOM HÀNG, ANH CẢ BTC & TOP TOKEN GOM HÀNG
     const part1Lines: string[] = [
-      `📊 <b>BÁO CÁO DÒNG TIỀN & ĐỘT BIẾN MUA (${tfLabel})</b>`,
-      `⏰ <i>Chu kỳ: ${tfLabel} / lần | Thống kê: TOP ${topLimit} thị trường</i>`,
+      `🐋 <b>BÁO CÁO CÁ VOI GOM HÀNG & DÒNG TIỀN (${tfLabel})</b>`,
+      `⏰ <i>Chu kỳ: ${tfLabel} / lần | Quét toàn bộ Futures Binance</i>`,
       '',
+      `🔍 <b>DẤU HIỆU NHẬN BIẾT CÁ VOI GOM HÀNG:</b>`,
+      `1️⃣ <b>Nền thanh khoản cạn</b>: Trước đó 1-5 ngày volume rất nhỏ, đi ngang nén chặt.`,
+      `2️⃣ <b>Volume bùng nổ</b>: Khối lượng ${tfLabel} đột biến gấp <b>1.8x - 10x+</b> so với nền.`,
+      `3️⃣ <b>Phe Mua gom áp đảo</b>: Taker Mua &gt;= 53%, Tiền gom ròng (Net Inflow) dương lớn.`,
+      `4️⃣ <b>Giá giữ vững nền</b>: Không bị xả đè đầu, gom âm thầm hoặc rút chân quét đáy / bứt phá.`,
+      '━━━━━━━━━━━━━━━━━━━━━',
     ];
 
     if (data.btc) {
@@ -355,21 +361,23 @@ export class TelegramService {
         `• Dòng tiền ${tfLabel}: <b>${flowSignTf}${formatMoney(netTf)}</b> (Mua: ${takerBuyPctTf.toFixed(1)}%)`,
         `• Dòng tiền 24h: <b>${flowSign24h}${formatMoney(btc.netInflow24h)}</b> (Mua: ${btc.takerBuyPct24h.toFixed(1)}%)`,
         `• Trạng thái: ${btcState} | <a href="${btcUrl}">Binance ↗</a>`,
-        '',
+        '━━━━━━━━━━━━━━━━━━━━━',
       );
     }
 
     const spikes = data.suddenSpikes || data.sudden1hSpikes || [];
-    part1Lines.push(`⚡ <b>TOP ${topLimit} ĐỘT BIẾN THANH KHOẢN MUA (${tfLabel}):</b>`);
-    part1Lines.push(`<i>(Các đồng thanh khoản ít trước đó đột nhiên bùng nổ volume mua trong ${tfLabel})</i>`);
+    part1Lines.push(`⚡ <b>TOP TOKEN CÓ DẤU HIỆU CÁ VOI GOM HÀNG (${tfLabel}):</b>`);
+    part1Lines.push(`<i>(Các token thanh khoản nhỏ nhiều ngày trước, đột nhiên bùng nổ volume gom mua)</i>`);
     if (!spikes || spikes.length === 0) {
-      part1Lines.push('<i>Chưa ghi nhận coin có thanh khoản đột biến vượt bậc trong chu kỳ này.</i>');
+      part1Lines.push('<i>Chưa ghi nhận coin có dấu hiệu cá voi gom đột biến trong chu kỳ này.</i>');
     } else {
       spikes.slice(0, topLimit).forEach((item, index) => {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        const pattern = item.accumulationPattern ? ` [<b>${item.accumulationPattern}</b>]` : '';
         part1Lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>x${item.spikeRatio.toFixed(1)} Vol</b> (${tfLabel}: ${formatMoney(item.currentVol)} | TB: ${formatMoney(item.prevAvgVol)}) | Mua: <b>${item.takerBuyPct.toFixed(0)}%</b> (+${formatMoney(item.netInflowUsdt)}) | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+          `${index + 1}. <b>#${item.symbol}</b>: <b>x${item.spikeRatio.toFixed(1)} Vol</b>${pattern}`,
+          `   • Vol: <b>${formatMoney(item.currentVol)}</b> (Nền cũ: ${formatMoney(item.prevAvgVol)}) | Mua: <b>${item.takerBuyPct.toFixed(0)}%</b> (+<b>${formatMoney(item.netInflowUsdt)}</b>) | Giá: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
     }
@@ -377,7 +385,7 @@ export class TelegramService {
     // PHẦN 2: BẢNG XẾP HẠNG DÒNG TIỀN GOM RÒNG & XẢ RÒNG (TOP 20)
     const part2Lines: string[] = [
       `📊 <b>BẢNG XẾP HẠNG DÒNG TIỀN (${tfLabel}) - PHẦN 2</b>`,
-      '',
+      '━━━━━━━━━━━━━━━━━━━━━',
       `🟢 <b>TOP ${topLimit} DÒNG TIỀN GOM RÒNG (${tfLabel}):</b>`,
     ];
 
@@ -393,7 +401,7 @@ export class TelegramService {
       });
     }
 
-    part2Lines.push('');
+    part2Lines.push('━━━━━━━━━━━━━━━━━━━━━');
     part2Lines.push(`🔴 <b>TOP ${topLimit} DÒNG TIỀN XẢ RÒNG (${tfLabel} - CẢNH BÁO RÚT VỐN):</b>`);
     if (!data.outflow || data.outflow.length === 0) {
       part2Lines.push('<i>Chưa ghi nhận coin có dòng tiền xả mạnh đột biến.</i>');

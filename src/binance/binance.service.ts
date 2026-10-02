@@ -72,6 +72,8 @@ export interface VolumeSpikeItem {
   takerBuyPct: number;     // % Khối lượng mua chủ động
   netInflowUsdt: number;   // Dòng tiền ròng USDT (Mua - Bán)
   priceChangePct: number;  // % Biến động giá
+  accumulationPattern?: string; // Dấu hiệu gom: Gom âm thầm / Quét đáy rút chân / Bứt phá nền
+  prevDaysConsolidated?: number; // Số ngày thanh khoản thấp trước đó
 }
 
 export interface CashflowReportData {
@@ -318,10 +320,12 @@ export class BinanceService {
   }
 
 
-  // Lấy báo cáo dòng tiền định kỳ theo khung giờ tùy biến (2h, 4h, 12h, 24h) và số lượng Top (mặc định Top 20)
-  async getCashflowReport(timeframeHours = 2, topLimit = 20): Promise<CashflowReportData> {
+  // Lấy báo cáo dòng tiền định kỳ theo khung giờ tùy biến (4h, 12h, 24h) và số lượng Top (mặc định Top 20)
+  async getCashflowReport(timeframeHours = 4, topLimit = 20): Promise<CashflowReportData> {
     const tf = Math.max(1, timeframeHours);
-    const limitKlines = Math.min(96, Math.max(48, tf * 3));
+    // Lấy đủ nến lịch sử từ 4 - 6 ngày trước (tương đương 96 - 144 nến 1H)
+    // để tính toán chính xác nền thanh khoản thấp/vừa nhiều ngày trước đó
+    const limitKlines = Math.max(120, tf * 4);
 
     // 1. Phân tích chi tiết Bitcoin (#BTCUSDT) trong khung thời gian tf và 24h
     let btcItem: BtcCashflowSummary | null = null;
@@ -376,11 +380,11 @@ export class BinanceService {
       this.logger.error(`Lỗi lấy dữ liệu BTC (${tf}h): ${err.message}`);
     }
 
-    // 2. Lấy danh sách toàn bộ altcoins hợp lệ để quét đột biến thanh khoản & dòng tiền
+    // 2. Lấy danh sách toàn bộ altcoins hợp lệ để quét đột biến thanh khoản & gom hàng
     const candidates = Array.from(this.ticker24hMap.values()).filter((t) => {
       if (!t.symbol || !t.symbol.endsWith('USDT')) return false;
       if (EXCLUDED_NON_CRYPTO_SYMBOLS.has(t.symbol)) return false;
-      return t.quoteVolume >= 200_000 && t.quoteVolume <= 600_000_000;
+      return t.quoteVolume >= 150_000 && t.quoteVolume <= 600_000_000;
     });
 
     const suddenSpikes: VolumeSpikeItem[] = [];
@@ -394,13 +398,14 @@ export class BinanceService {
         batch.map(async (c) => {
           try {
             const klines = await this.getKlines(c.symbol, '1h', limitKlines);
-            if (!klines || klines.length < tf + 10) return;
+            if (!klines || klines.length < tf + 12) return;
 
             const recentKlines = klines.slice(klines.length - tf);
             const prevKlines = klines.slice(0, klines.length - tf);
+            const prevDays = Number((prevKlines.length / 24).toFixed(1));
 
             const volTf = recentKlines.reduce((s, k) => s + k.quoteVolume, 0);
-            if (volTf < tf * 25_000) return; // Bỏ qua token không có giao dịch đáng kể
+            if (volTf < tf * 20_000) return; // Bỏ qua token không có giao dịch đáng kể
 
             const buyTf = recentKlines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
             const sellTf = Math.max(0, volTf - buyTf);
@@ -421,35 +426,49 @@ export class BinanceService {
               currentPrice: lastK.close,
             });
 
-            // Tính toán Volume cơ sở chu kỳ trước (Baseline) chuẩn hóa theo tf giờ
-            const avgPrevVol =
+            // Tính toán Volume cơ sở chu kỳ trước (Baseline) chuẩn hóa theo tf giờ từ nhiều ngày trước
+            const avgPrevVolPerHour =
               prevKlines.length > 0
-                ? (prevKlines.reduce((s, k) => s + k.quoteVolume, 0) / prevKlines.length) * tf
+                ? prevKlines.reduce((s, k) => s + k.quoteVolume, 0) / prevKlines.length
                 : 0;
-            const spikeRatio = avgPrevVol > 0 ? volTf / avgPrevVol : 1;
+            const avgPrevVolTf = avgPrevVolPerHour * tf;
+            const spikeRatio = avgPrevVolTf > 0 ? volTf / avgPrevVolTf : 1;
 
-            // Tiêu chí phát hiện "Đang có thanh khoản ít đột nhiên thanh khoản tăng & mua nhiều":
-            // 1. Trước đó thanh khoản thấp / vừa (TB < $2.5M mỗi giờ)
-            // 2. Chu kỳ hiện tại volume đạt tối thiểu >= tf * $100k USDT
-            // 3. Tỷ lệ tăng đột biến volume >= 1.6x so với chu kỳ trước
-            // 4. Có dấu hiệu MUA RÕ RỆT: Taker Buy % >= 53%, Net Inflow > 0, giá giữ hoặc tăng (>= -0.5%)
+            // ĐIỀU KIỆN NHẬN DIỆN TOKEN CÓ DẤU HIỆU CÁ VOI GOM HÀNG:
+            // 1. Trước đó 1-5 ngày thanh khoản nhỏ / vừa (TB mỗi giờ < $1.5M USDT)
+            // 2. Chu kỳ hiện tại volume đạt chuẩn (tối thiểu >= tf * $80,000 USDT)
+            // 3. Tỷ lệ tăng đột biến volume >= 1.65x so với nền trung bình nhiều ngày trước
+            // 4. Có dấu hiệu MUA RÕ RỆT: Taker Buy % >= 52.5% và Net Inflow > 0
+            // 5. Giá giữ nền hoặc tăng, không bị xả sập (priceChangePctTf >= -2.5%)
             if (
-              avgPrevVol < tf * 2_500_000 &&
-              volTf >= tf * 100_000 &&
-              spikeRatio >= 1.6 &&
-              takerBuyPctTf >= 53 &&
+              avgPrevVolPerHour < 1_500_000 &&
+              volTf >= tf * 80_000 &&
+              spikeRatio >= 1.65 &&
+              takerBuyPctTf >= 52.5 &&
               netInflowTf > 0 &&
-              priceChangePctTf >= -0.5
+              priceChangePctTf >= -2.5
             ) {
+              // Phân loại hình thái gom hàng của cá voi:
+              let pattern = '🌊 Bơm Gom Mạnh';
+              if (spikeRatio >= 1.8 && Math.abs(priceChangePctTf) <= 3.5) {
+                pattern = '🤫 Gom Âm Thầm (Nén Chặt)';
+              } else if (firstK.open > lastK.close * 0.98 && takerBuyPctTf >= 58 && priceChangePctTf >= -1.0) {
+                pattern = '🦅 Quét Đáy Rút Chân';
+              } else if (priceChangePctTf > 3.5 && spikeRatio >= 2.0) {
+                pattern = '🚀 Bứt Phá Nền Tích Lũy';
+              }
+
               suddenSpikes.push({
                 symbol: c.symbol,
                 currentPrice: lastK.close,
                 spikeRatio,
                 currentVol: volTf,
-                prevAvgVol: avgPrevVol,
+                prevAvgVol: avgPrevVolTf,
                 takerBuyPct: takerBuyPctTf,
                 netInflowUsdt: netInflowTf,
                 priceChangePct: priceChangePctTf,
+                accumulationPattern: pattern,
+                prevDaysConsolidated: prevDays,
               });
             }
           } catch {
