@@ -273,53 +273,76 @@ export class ScannerService implements OnApplicationBootstrap {
       if (priceChange1mPct < 0.40) continue; // Triệt tiêu nến 1m lèo tèo
       if (priceChange1mPct > 5.0 || priceChange3mPct > 7.0) continue;
 
-      // Nến không bị xả đè đầu: râu trên ngắn (<= 28% thân nến) để đảm bảo lực mua nuốt trọn lực bán
-      if (candleRange > 0 && upperWickRatio > 0.28) continue;
+      // Nến không bị xả đè đầu: râu trên cực ngắn (<= 20% thân nến) đảm bảo phe mua nuốt trọn toàn bộ phe bán
+      if (candleRange > 0 && upperWickRatio > 0.20) continue;
 
-      // 5. YÊU CẦU DÒNG TIỀN BƠM CỰC MẠNH (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU / LÈO TÈO):
-      const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
+      // =====================================================================
+      // ĐIỀU KIỆN TIÊN QUYẾT BẮT BUỘC: ĐỘ BIẾN ĐỘNG 1S MẠNH & DÒNG TIỀN VÀO THẬT
+      // =====================================================================
+      // BẮT BUỘC có độ biến động khung giây (1s/5s) bùng nổ: velocityPct >= 0.15% và dòng tiền đổ vào >= 12,000 USDT
+      if (!velocityData || velocityData.velocityPct < 0.15 || velocityData.volInflow < 12_000) {
+        continue; // Không có dòng tiền vào dồn dập và độ biến động 1s mạnh -> BỎ QUA NGAY
+      }
+
+      // =====================================================================
+      // ĐIỀU KIỆN TIÊN QUYẾT: NGƯỜI MUA NGƯỜI BÁN NHIỀU THẬT SỰ (KHÔNG PHẢI BOT KÉO ẢO)
+      // =====================================================================
       const evalVol1m = evalCandle.quoteVolume;
       const evalBuyVol1m = evalCandle.takerBuyQuoteVolume;
       const evalSellVol1m = Math.max(0, evalVol1m - evalBuyVol1m);
       const netCashflow1m = evalBuyVol1m - evalSellVol1m;
       const takerBuyPct1m = evalVol1m > 0 ? (evalBuyVol1m / evalVol1m) * 100 : 50;
-      const volumeMultiplier = avgBaseVolume > 0 ? evalVol1m / avgBaseVolume : 0;
 
       const last3Klines = klines.slice(evalIndex - 2, evalIndex + 1);
       const vol3m = last3Klines.reduce((s, k) => s + k.quoteVolume, 0);
       const buyVol3m = last3Klines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
       const avg3mVol = vol3m / 3;
-      const volumeMultiplier3m = avgBaseVolume > 0 ? avg3mVol / avgBaseVolume : 0;
       const netCashflow3m = buyVol3m - (vol3m - buyVol3m);
       const takerBuyPct3m = vol3m > 0 ? (buyVol3m / vol3m) * 100 : 50;
 
-      // 5.1. BẢO VỆ TUYỆT ĐỐI KHỎI BẪY "KÉO LÊ ĐỂ BÁN" (BULL TRAP / DISTRIBUTION):
-      // Cá mập kéo rướn giá lên để dụ thanh khoản nhỏ lẻ nhưng âm thầm xả hàng:
-      // - Râu trên dài (upperWickRatio > 0.28): kéo lên bị đè xả ngược lại
-      // - Kéo rướn nhưng Volume cạn (Volume Exhaustion): Vol hiện tại sụt giảm trong khi giá tăng
-      // - Phân kỳ dòng tiền: Taker Buy < 65% hoặc dòng tiền 5s velocity báo âm
-      const prevCandle1 = klines[evalIndex - 1];
-      const isVolumeExhausted = prevCandle1 && evalVol1m < prevCandle1.quoteVolume * 0.70 && priceChange1mPct > 0;
-      const isUpperWickRejected = upperWickRatio > 0.28;
-      const isVelocityOutflow = velocityData && (velocityData.velocityPct < -0.05);
-      const isKeoLeDeBan = isUpperWickRejected || (isVolumeExhausted && takerBuyPct1m < 66) || isVelocityOutflow;
-
-      if (isKeoLeDeBan) {
-        continue; // Tuyệt đối loại bỏ bẫy kéo lê để bán!
+      // Số lượng giao dịch thực tế (Trades): Nhiều người mua bán thực sự (1m >= 250 lệnh hoặc 3m >= 700 lệnh)
+      const trades1m = evalCandle.trades;
+      const trades3m = last3Klines.reduce((s, k) => s + k.trades, 0);
+      if (trades1m < 250 && trades3m < 700) {
+        continue; // Số lệnh giao dịch quá ít, thanh khoản quay tay giả tạo -> BỎ QUA
       }
 
-      // 5.2. TIÊU CHUẨN DÒNG TIỀN BƠM CỰC MẠNH & MUA ÁP ĐẢO (LOẠI BỎ TRIỆT ĐỂ BƠM YẾU):
-      // - Khối lượng 1m >= 180,000 USDT (hoặc vol 3m >= 450,000 USDT)
-      // - Volume đột biến gấp ít nhất 2.8x nền (hoặc 3m gấp 2.2x nền)
-      // - Phe Mua áp đảo dứt khoát: Taker Buy 1m >= 65% hoặc 3m >= 66%
-      // - Dòng tiền mua ròng khủng: Net Inflow 1m >= 75,000 USDT HOẶC Net Inflow 3m >= 180,000 USDT
-      const isStrongCashflow =
-        (evalVol1m >= 180_000 || vol3m >= 450_000) &&
-        (volumeMultiplier >= 2.8 || volumeMultiplier3m >= 2.2) &&
-        (takerBuyPct1m >= 65 || takerBuyPct3m >= 66) &&
-        (netCashflow1m >= 75_000 || netCashflow3m >= 180_000);
+      // Khối lượng USDT thực tế phải lớn: 1m >= 200,000 USDT hoặc 3m >= 500,000 USDT
+      if (evalVol1m < 200_000 && vol3m < 500_000) {
+        continue;
+      }
 
-      if (!isStrongCashflow) continue;
+      // =====================================================================
+      // BẢO VỆ TUYỆT ĐỐI KHỎI BẪY "KÉO LÊN ĐỂ BÁN / DỤ LONG" (BULL TRAP / FAKEOUT):
+      // =====================================================================
+      // 1. Râu trên bị xả đè: upperWickRatio > 0.20
+      // 2. Kéo rướn nhưng cạn kiệt Volume (Volume Exhaustion)
+      // 3. Phe mua không làm chủ áp đảo: Taker Buy 1m < 66% hoặc 3m < 65%
+      // 4. Tiền mua ròng không đủ áp đảo: Net Inflow 1m < 75,000 USDT và Net Inflow 3m < 180,000 USDT
+      // 5. Khung giây có dấu hiệu xả ngầm hoặc rút vốn
+      const prevCandle1 = klines[evalIndex - 1];
+      const isVolumeExhausted = prevCandle1 && evalVol1m < prevCandle1.quoteVolume * 0.72 && priceChange1mPct > 0;
+      const isFakeDuLong =
+        upperWickRatio > 0.20 ||
+        (isVolumeExhausted && takerBuyPct1m < 70) ||
+        takerBuyPct1m < 66 ||
+        takerBuyPct3m < 65 ||
+        (netCashflow1m < 75_000 && netCashflow3m < 180_000) ||
+        velocityData.velocityPct <= 0 ||
+        velocityData.volInflow <= 0;
+
+      if (isFakeDuLong) {
+        continue; // TUYỆT ĐỐI LOẠI BỎ BẪY KÉO LÊN ĐỂ BÁN / DỤ LONG!
+      }
+
+      const avgBaseVolume = baseKlines.reduce((s, k) => s + k.quoteVolume, 0) / baseKlines.length;
+      const volumeMultiplier = avgBaseVolume > 0 ? evalVol1m / avgBaseVolume : 0;
+      const volumeMultiplier3m = avgBaseVolume > 0 ? avg3mVol / avgBaseVolume : 0;
+
+      // Volume đột biến gấp ít nhất 2.5x nền (hoặc 3m gấp 2.0x nền)
+      if (volumeMultiplier < 2.5 && volumeMultiplier3m < 2.0) {
+        continue;
+      }
 
       // 5.3. PHÂN BIỆT RÕ RÀNG HÌNH THÁI DÒNG TIỀN:
       // A. "KÉO XUỐNG ĐỂ BAY" (SPRING SHAKEOUT / RŨ CUNG QUÉT ĐÁY):
@@ -850,6 +873,12 @@ export class ScannerService implements OnApplicationBootstrap {
       // Taker Buy phải chiếm ưu thế áp đảo tại đáy cú chỉnh (tối thiểu 58%)
       if (takerBuyPct < 58.0) {
         return; // Phe mua chưa làm chủ vùng giá này
+      }
+
+      // BẮT BUỘC: Khung 1s/5s phải có tốc độ giật giá hồi phục & dòng tiền đổ vào đỡ
+      const velocityData = this.binanceService.getVelocityData(symbol);
+      if (!velocityData || velocityData.velocityPct < 0.10 || velocityData.volInflow < 8_000) {
+        return; // Chưa có xung lực giật giá và dòng tiền tức thì khung giây nảy lên -> BỎ QUA
       }
 
       // 6. HÀNH ĐỘNG GIÁ XÁC NHẬN ĐÃ ĐỠ THÀNH CÔNG VÀ ĐANG ĐẢO CHIỀU ĐI LÊN
