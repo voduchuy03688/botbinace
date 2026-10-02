@@ -155,6 +155,34 @@ export class TelegramService {
       }
     }
 
+    // Nếu tin nhắn vượt quá giới hạn 4096 ký tự của Telegram, tự động chia nhỏ theo dòng
+    if (text.length > 4000) {
+      const lines = text.split('\n');
+      const chunks: string[] = [];
+      let currentChunk = '';
+      for (const line of lines) {
+        if ((currentChunk + '\n' + line).length > 3900) {
+          if (currentChunk) chunks.push(currentChunk);
+          currentChunk = line;
+        } else {
+          currentChunk = currentChunk ? currentChunk + '\n' + line : line;
+        }
+      }
+      if (currentChunk) chunks.push(currentChunk);
+
+      let success = true;
+      for (const chunk of chunks) {
+        const ok = await this.sendDirect(chunk);
+        if (!ok) success = false;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return success;
+    }
+
+    return this.sendDirect(text);
+  }
+
+  private async sendDirect(text: string): Promise<boolean> {
     try {
       const url = `https://api.telegram.org/bot${this.botToken}/sendMessage`;
       await axios.post(url, {
@@ -286,9 +314,13 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO BÁO CÁO DÒNG TIỀN 12H (BTC & COIN RÁC / MEME COIN)
+  // THÔNG BÁO BÁO CÁO DÒNG TIỀN & ĐỘT BIẾN THANH KHOẢN (TOP 20)
   // =========================================================================
   async sendCashflowReportAlert(data: CashflowReportData): Promise<boolean> {
+    const tf = data.timeframeHours || 2;
+    const topLimit = data.topLimit || 20;
+    const tfLabel = tf === 24 ? '1 NGÀY' : `${tf}H`;
+
     const formatMoney = (val: number): string => {
       const abs = Math.abs(val);
       if (abs >= 1_000_000) return `$${(abs / 1_000_000).toFixed(2)}M`;
@@ -296,72 +328,92 @@ export class TelegramService {
       return `$${Math.round(abs)}`;
     };
 
-    const lines: string[] = [
-      `📊 <b>BÁO CÁO DÒNG TIỀN 12H (BTC & LOWCAP / MEME COIN)</b>`,
-      `⏰ <i>Khung: 12 Giờ qua | Chu kỳ: 12h/lần</i>`,
+    // PHẦN 1: BÁO CÁO BTC & TOP ĐỘT BIẾN THANH KHOẢN MUA
+    const part1Lines: string[] = [
+      `📊 <b>BÁO CÁO DÒNG TIỀN & ĐỘT BIẾN MUA (${tfLabel})</b>`,
+      `⏰ <i>Chu kỳ: ${tfLabel} / lần | Thống kê: TOP ${topLimit} thị trường</i>`,
       '',
     ];
 
     if (data.btc) {
       const btc = data.btc;
-      const btcSign = btc.priceChangePct >= 0 ? '+' : '';
-      const btcFlowSign = btc.netInflowUsdt >= 0 ? '+' : '-';
+      const btcTfSign = (btc.priceChangePctTf ?? btc.priceChangePct) >= 0 ? '+' : '';
+      const btc24hSign = btc.priceChangePct24h >= 0 ? '+' : '';
+      const netTf = btc.netInflowTf ?? btc.netInflowUsdt;
+      const flowSignTf = netTf >= 0 ? '+' : '-';
+      const flowSign24h = btc.netInflow24h >= 0 ? '+' : '-';
+      const takerBuyPctTf = btc.takerBuyPctTf ?? btc.takerBuyPct;
       const btcState =
-        btc.netInflowUsdt > 0
+        netTf > 0
           ? '🟢 Gom ròng (Inflow)'
           : '🔴 Xả ròng (Outflow)';
       const btcUrl = `https://www.binance.com/en/futures/BTCUSDT`;
 
-      lines.push(
+      part1Lines.push(
         `👑 <b>ANH CẢ BITCOIN (#BTCUSDT):</b>`,
-        `• Giá: <code>$${btc.currentPrice.toLocaleString('en-US')}</code> (${btcSign}${btc.priceChangePct.toFixed(2)}%)`,
-        `• Dòng tiền 12h: <b>${btcFlowSign}${formatMoney(btc.netInflowUsdt)}</b> (Mua: ${btc.takerBuyPct.toFixed(1)}%)`,
+        `• Giá: <code>$${btc.currentPrice.toLocaleString('en-US')}</code> (${tfLabel}: ${btcTfSign}${(btc.priceChangePctTf ?? btc.priceChangePct).toFixed(2)}% | 24h: ${btc24hSign}${btc.priceChangePct24h.toFixed(2)}%)`,
+        `• Dòng tiền ${tfLabel}: <b>${flowSignTf}${formatMoney(netTf)}</b> (Mua: ${takerBuyPctTf.toFixed(1)}%)`,
+        `• Dòng tiền 24h: <b>${flowSign24h}${formatMoney(btc.netInflow24h)}</b> (Mua: ${btc.takerBuyPct24h.toFixed(1)}%)`,
         `• Trạng thái: ${btcState} | <a href="${btcUrl}">Binance ↗</a>`,
         '',
       );
     }
 
-    lines.push(`🟢 <b>TOP DÒNG TIỀN VÀO (GOM HÀNG 12H - COIN RÁC & MEME):</b>`);
-    if (!data.inflow || data.inflow.length === 0) {
-      lines.push('<i>Chưa ghi nhận coin có dòng tiền gom đột biến.</i>');
+    const spikes = data.suddenSpikes || data.sudden1hSpikes || [];
+    part1Lines.push(`⚡ <b>TOP ${topLimit} ĐỘT BIẾN THANH KHOẢN MUA (${tfLabel}):</b>`);
+    part1Lines.push(`<i>(Các đồng thanh khoản ít trước đó đột nhiên bùng nổ volume mua trong ${tfLabel})</i>`);
+    if (!spikes || spikes.length === 0) {
+      part1Lines.push('<i>Chưa ghi nhận coin có thanh khoản đột biến vượt bậc trong chu kỳ này.</i>');
     } else {
-      data.inflow.slice(0, 10).forEach((item, index) => {
+      spikes.slice(0, topLimit).forEach((item, index) => {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
-        lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.netInflowUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | 12h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        part1Lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>x${item.spikeRatio.toFixed(1)} Vol</b> (${tfLabel}: ${formatMoney(item.currentVol)} | TB: ${formatMoney(item.prevAvgVol)}) | Mua: <b>${item.takerBuyPct.toFixed(0)}%</b> (+${formatMoney(item.netInflowUsdt)}) | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
     }
 
-    lines.push('');
-    lines.push(`🔴 <b>TOP DÒNG TIỀN RA (XẢ HÀNG / RÚT VỐN 12H):</b>`);
-    if (!data.outflow || data.outflow.length === 0) {
-      lines.push('<i>Chưa ghi nhận coin có dòng tiền xả mạnh đột biến.</i>');
+    // PHẦN 2: BẢNG XẾP HẠNG DÒNG TIỀN GOM RÒNG & XẢ RÒNG (TOP 20)
+    const part2Lines: string[] = [
+      `📊 <b>BẢNG XẾP HẠNG DÒNG TIỀN (${tfLabel}) - PHẦN 2</b>`,
+      '',
+      `🟢 <b>TOP ${topLimit} DÒNG TIỀN GOM RÒNG (${tfLabel}):</b>`,
+    ];
+
+    if (!data.inflow || data.inflow.length === 0) {
+      part2Lines.push('<i>Chưa ghi nhận coin có dòng tiền gom mạnh.</i>');
     } else {
-      data.outflow.slice(0, 10).forEach((item, index) => {
+      data.inflow.slice(0, topLimit).forEach((item, index) => {
+        const sign = item.priceChangePct >= 0 ? '+' : '';
+        const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        part2Lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.netInflowUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        );
+      });
+    }
+
+    part2Lines.push('');
+    part2Lines.push(`🔴 <b>TOP ${topLimit} DÒNG TIỀN XẢ RÒNG (${tfLabel} - CẢNH BÁO RÚT VỐN):</b>`);
+    if (!data.outflow || data.outflow.length === 0) {
+      part2Lines.push('<i>Chưa ghi nhận coin có dòng tiền xả mạnh đột biến.</i>');
+    } else {
+      data.outflow.slice(0, topLimit).forEach((item, index) => {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
         const sellPct = 100 - item.takerBuyPct;
-        lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>-${formatMoney(item.netInflowUsdt)}</b> (Bán: ${sellPct.toFixed(0)}%) | 12h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+        part2Lines.push(
+          `${index + 1}. <b>#${item.symbol}</b>: <b>-${formatMoney(item.netInflowUsdt)}</b> (Bán: ${sellPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
     }
 
-    if (data.strongDailyBuys && data.strongDailyBuys.length > 0) {
-      lines.push('');
-      lines.push(`🔥 <b>TOP COIN LỰC MUA MẠNH KHUNG 1D:</b>`);
-      data.strongDailyBuys.slice(0, 5).forEach((item, index) => {
-        const sign = item.priceChangePct >= 0 ? '+' : '';
-        const url = `https://www.binance.com/en/futures/${item.symbol}`;
-        lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.takerBuyUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | 24h: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
-        );
-      });
-    }
+    // Gửi tin nhắn phần 1, sau đó gửi phần 2 để không bao giờ bị nghẽn giới hạn 4096 ký tự
+    const res1 = await this.sendMessage(part1Lines.join('\n'));
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const res2 = await this.sendMessage(part2Lines.join('\n'));
 
-    return this.sendMessage(lines.join('\n'));
+    return res1 && res2;
   }
 }
 

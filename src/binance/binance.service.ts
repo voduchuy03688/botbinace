@@ -41,10 +41,48 @@ export interface CashflowReportItem {
   currentPrice: number;
 }
 
+export interface BtcCashflowSummary {
+  symbol: string;
+  currentPrice: number;
+  timeframeHours?: number;
+  priceChangePct: number;
+  priceChangePctTf?: number;
+  priceChangePct1h?: number;
+  priceChangePct24h: number;
+  netInflowUsdt: number;
+  netInflowTf?: number;
+  netInflow1h?: number;
+  volumeUsdt: number;
+  volumeTf?: number;
+  volume1h?: number;
+  takerBuyPct: number;
+  takerBuyPctTf?: number;
+  takerBuyPct1h?: number;
+  netInflow24h: number;
+  volume24h: number;
+  takerBuyPct24h: number;
+}
+
+export interface VolumeSpikeItem {
+  symbol: string;
+  currentPrice: number;
+  spikeRatio: number;      // Tỷ lệ tăng đột biến (ví dụ x5.2 lần)
+  currentVol: number;      // Khối lượng USDT chu kỳ hiện tại
+  prevAvgVol: number;      // Khối lượng trung bình USDT các chu kỳ trước đó
+  takerBuyPct: number;     // % Khối lượng mua chủ động
+  netInflowUsdt: number;   // Dòng tiền ròng USDT (Mua - Bán)
+  priceChangePct: number;  // % Biến động giá
+}
+
 export interface CashflowReportData {
-  btc: CashflowReportItem | null;
+  timeframeHours: number;
+  topLimit: number;
+  btc: BtcCashflowSummary | null;
+  suddenSpikes: VolumeSpikeItem[];
   inflow: CashflowReportItem[];
   outflow: CashflowReportItem[];
+  sudden1hSpikes?: VolumeSpikeItem[];
+  sudden1dSpikes?: VolumeSpikeItem[];
   strongDailyBuys?: Array<{ symbol: string; takerBuyUsdt: number; priceChangePct: number; takerBuyPct: number }>;
 }
 
@@ -76,6 +114,17 @@ export const EXCLUDED_MAJOR_MID_CAPS = new Set([
   'FOOTBALLUSDT',
 ]);
 
+// Danh sách các cặp không phải crypto phái sinh thông thường (Stablecoin, Chỉ số, Cổ phiếu)
+export const EXCLUDED_NON_CRYPTO_SYMBOLS = new Set([
+  'BTCUSDT',
+  'USDCUSDT', 'FDUSDUSDT', 'TUSDUSDT', 'EURUSDT',
+  'BTCDOMUSDT', 'DEFIUSDT', 'FOOTBALLUSDT',
+  'TSLAUSDT', 'INTCUSDT', 'HOODUSDT', 'MSTRUSDT', 'AMZNUSDT', 'COINUSDT',
+  'PLTRUSDT', 'METAUSDT', 'NVDAUSDT', 'GOOGLUSDT', 'QQQUSDT', 'SPYUSDT',
+  'AAPLUSDT', 'MUUSDT', 'MSFTUSDT', 'AVGOUSDT', 'BABAUSDT', 'AMDUSDT',
+  'SOXLUSDT', 'ARMUSDT', 'SKHYNIXUSDT', 'SAMSUNGUSDT', 'SKHYUSDT',
+]);
+
 @Injectable()
 export class BinanceService {
   private readonly logger = new Logger(BinanceService.name);
@@ -87,8 +136,8 @@ export class BinanceService {
     Accept: 'application/json',
   };
 
-  // Lọc các coin Futures có thanh khoản 24h >= 3,000,000 USDT (loại bỏ hoàn toàn coin rác kém thanh khoản, tránh bẫy giật ảo)
-  private readonly MIN_VOLUME_24H_USDT = 3_000_000;
+  // Giữ lại các cặp Futures có thanh khoản 24h >= 200,000 USDT để không bỏ sót coin vừa thức giấc
+  private readonly MIN_VOLUME_24H_USDT = 200_000;
 
   private ticker24hMap: Map<string, Ticker24hData> = new Map();
   private previousPriceMap: Map<string, { price: number; quoteVol: number; timestamp: number }> = new Map();
@@ -269,111 +318,173 @@ export class BinanceService {
   }
 
 
-  // Lấy báo cáo dòng tiền 12h: BTC và Top coin rác / vốn hóa nhỏ / meme coin gom hàng hoặc xả hàng
-  async getCashflowReport(): Promise<CashflowReportData> {
-    // 1. Phân tích riêng cho Bitcoin (#BTCUSDT) trong 12h
-    let btcItem: CashflowReportItem | null = null;
+  // Lấy báo cáo dòng tiền định kỳ theo khung giờ tùy biến (2h, 4h, 12h, 24h) và số lượng Top (mặc định Top 20)
+  async getCashflowReport(timeframeHours = 2, topLimit = 20): Promise<CashflowReportData> {
+    const tf = Math.max(1, timeframeHours);
+    const limitKlines = Math.min(96, Math.max(48, tf * 3));
+
+    // 1. Phân tích chi tiết Bitcoin (#BTCUSDT) trong khung thời gian tf và 24h
+    let btcItem: BtcCashflowSummary | null = null;
     try {
-      const btcKlines = await this.getKlines('BTCUSDT', '1h', 12);
-      if (btcKlines && btcKlines.length > 0) {
-        const totalVol = btcKlines.reduce((s, k) => s + k.quoteVolume, 0);
-        const takerBuy = btcKlines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
-        const takerSell = Math.max(0, totalVol - takerBuy);
-        const first = btcKlines[0];
-        const last = btcKlines[btcKlines.length - 1];
-        const priceChangePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
+      const btcKlines = await this.getKlines('BTCUSDT', '1h', limitKlines);
+      if (btcKlines && btcKlines.length >= tf) {
+        const recentBtc = btcKlines.slice(btcKlines.length - tf);
+        const last1h = btcKlines[btcKlines.length - 1];
+
+        const volTf = recentBtc.reduce((s, k) => s + k.quoteVolume, 0);
+        const buyTf = recentBtc.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+        const sellTf = Math.max(0, volTf - buyTf);
+        const netInflowTf = buyTf - sellTf;
+        const takerBuyPctTf = volTf > 0 ? (buyTf / volTf) * 100 : 50;
+        const firstTf = recentBtc[0];
+        const priceChangePctTf =
+          firstTf.open > 0 ? ((last1h.close - firstTf.open) / firstTf.open) * 100 : 0;
+
+        const last24hBtc = btcKlines.slice(Math.max(0, btcKlines.length - 24));
+        const vol24h = last24hBtc.reduce((s, k) => s + k.quoteVolume, 0);
+        const buy24h = last24hBtc.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+        const sell24h = Math.max(0, vol24h - buy24h);
+        const netInflow24h = buy24h - sell24h;
+        const takerBuyPct24h = vol24h > 0 ? (buy24h / vol24h) * 100 : 50;
+        const first24h = last24hBtc[0];
+        const priceChangePct24h =
+          first24h.open > 0 ? ((last1h.close - first24h.open) / first24h.open) * 100 : 0;
 
         btcItem = {
           symbol: 'BTCUSDT',
-          netInflowUsdt: takerBuy - takerSell,
-          volumeUsdt: totalVol,
-          priceChangePct,
-          takerBuyPct: totalVol > 0 ? (takerBuy / totalVol) * 100 : 50,
-          currentPrice: last.close,
+          currentPrice: last1h.close,
+          timeframeHours: tf,
+          priceChangePct: priceChangePctTf,
+          priceChangePctTf,
+          priceChangePct1h: priceChangePctTf,
+          priceChangePct24h,
+          netInflowUsdt: netInflowTf,
+          netInflowTf,
+          netInflow1h: netInflowTf,
+          volumeUsdt: volTf,
+          volumeTf: volTf,
+          volume1h: volTf,
+          takerBuyPct: takerBuyPctTf,
+          takerBuyPctTf,
+          takerBuyPct1h: takerBuyPctTf,
+          netInflow24h,
+          volume24h: vol24h,
+          takerBuyPct24h,
         };
       }
     } catch (err: any) {
-      this.logger.error(`Lỗi lấy dữ liệu 12h BTC: ${err.message}`);
+      this.logger.error(`Lỗi lấy dữ liệu BTC (${tf}h): ${err.message}`);
     }
 
-    // 2. Lấy danh sách coin rác / low-cap / meme coin (loại trừ BTC & coin lớn/vừa)
-    const eligibleTickers = this.getEligibleMoversPool(1_500_000, -80.0, 500.0)
-      .filter((t) => t.symbol !== 'BTCUSDT' && !EXCLUDED_MAJOR_MID_CAPS.has(t.symbol));
+    // 2. Lấy danh sách toàn bộ altcoins hợp lệ để quét đột biến thanh khoản & dòng tiền
+    const candidates = Array.from(this.ticker24hMap.values()).filter((t) => {
+      if (!t.symbol || !t.symbol.endsWith('USDT')) return false;
+      if (EXCLUDED_NON_CRYPTO_SYMBOLS.has(t.symbol)) return false;
+      return t.quoteVolume >= 200_000 && t.quoteVolume <= 600_000_000;
+    });
 
-    const results: Array<CashflowReportItem & { dailyTakerBuyUsdt?: number; dailyTakerBuyPct?: number }> = [];
+    const suddenSpikes: VolumeSpikeItem[] = [];
+    const allTfItems: CashflowReportItem[] = [];
 
-    // Lấy song song theo từng batch 25 coin
-    const batchSize = 25;
-    for (let i = 0; i < eligibleTickers.length; i += batchSize) {
-      const batch = eligibleTickers.slice(i, i + batchSize);
-      const batchResults = await Promise.all(
-        batch.map(async (t) => {
-          // Lấy 12 nến 1h để tính chuẩn xác dòng tiền 12h
-          const klines12h = await this.getKlines(t.symbol, '1h', 12);
-          if (!klines12h || klines12h.length < 3) return null;
+    // Lấy song song theo từng batch 30 coin
+    const batchSize = 30;
+    for (let i = 0; i < candidates.length; i += batchSize) {
+      const batch = candidates.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (c) => {
+          try {
+            const klines = await this.getKlines(c.symbol, '1h', limitKlines);
+            if (!klines || klines.length < tf + 10) return;
 
-          const totalVol = klines12h.reduce((s, k) => s + k.quoteVolume, 0);
-          if (totalVol < 200_000) return null; // Bỏ qua token không có giao dịch đáng kể
+            const recentKlines = klines.slice(klines.length - tf);
+            const prevKlines = klines.slice(0, klines.length - tf);
 
-          const takerBuy = klines12h.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
-          const takerSell = Math.max(0, totalVol - takerBuy);
-          const netInflowUsdt = takerBuy - takerSell;
-          const takerBuyPct = totalVol > 0 ? (takerBuy / totalVol) * 100 : 50;
+            const volTf = recentKlines.reduce((s, k) => s + k.quoteVolume, 0);
+            if (volTf < tf * 25_000) return; // Bỏ qua token không có giao dịch đáng kể
 
-          const first = klines12h[0];
-          const last = klines12h[klines12h.length - 1];
-          const priceChangePct = first.open > 0 ? ((last.close - first.open) / first.open) * 100 : 0;
+            const buyTf = recentKlines.reduce((s, k) => s + k.takerBuyQuoteVolume, 0);
+            const sellTf = Math.max(0, volTf - buyTf);
+            const netInflowTf = buyTf - sellTf;
+            const takerBuyPctTf = volTf > 0 ? (buyTf / volTf) * 100 : 50;
 
-          // Nến 1 Ngày (1d) để tìm coin lực mua mạnh khung 1D chuẩn bị bay (bảo toàn logic cũ)
-          const klines1d = await this.getKlines(t.symbol, '1d', 2);
-          const current1d = klines1d && klines1d.length > 0 ? klines1d[klines1d.length - 1] : null;
-          const dailyTakerBuyUsdt = current1d ? current1d.takerBuyQuoteVolume : 0;
-          const dailyTotalVol = current1d ? current1d.quoteVolume : 0;
-          const dailyTakerBuyPct = dailyTotalVol > 0 ? (dailyTakerBuyUsdt / dailyTotalVol) * 100 : 50;
+            const firstK = recentKlines[0];
+            const lastK = recentKlines[recentKlines.length - 1];
+            const priceChangePctTf =
+              firstK.open > 0 ? ((lastK.close - firstK.open) / firstK.open) * 100 : 0;
 
-          return {
-            symbol: t.symbol,
-            netInflowUsdt,
-            volumeUsdt: totalVol,
-            priceChangePct,
-            takerBuyPct,
-            currentPrice: last.close,
-            dailyTakerBuyUsdt,
-            dailyTakerBuyPct,
-          };
+            allTfItems.push({
+              symbol: c.symbol,
+              netInflowUsdt: netInflowTf,
+              volumeUsdt: volTf,
+              priceChangePct: priceChangePctTf,
+              takerBuyPct: takerBuyPctTf,
+              currentPrice: lastK.close,
+            });
+
+            // Tính toán Volume cơ sở chu kỳ trước (Baseline) chuẩn hóa theo tf giờ
+            const avgPrevVol =
+              prevKlines.length > 0
+                ? (prevKlines.reduce((s, k) => s + k.quoteVolume, 0) / prevKlines.length) * tf
+                : 0;
+            const spikeRatio = avgPrevVol > 0 ? volTf / avgPrevVol : 1;
+
+            // Tiêu chí phát hiện "Đang có thanh khoản ít đột nhiên thanh khoản tăng & mua nhiều":
+            // 1. Trước đó thanh khoản thấp / vừa (TB < $2.5M mỗi giờ)
+            // 2. Chu kỳ hiện tại volume đạt tối thiểu >= tf * $100k USDT
+            // 3. Tỷ lệ tăng đột biến volume >= 1.6x so với chu kỳ trước
+            // 4. Có dấu hiệu MUA RÕ RỆT: Taker Buy % >= 53%, Net Inflow > 0, giá giữ hoặc tăng (>= -0.5%)
+            if (
+              avgPrevVol < tf * 2_500_000 &&
+              volTf >= tf * 100_000 &&
+              spikeRatio >= 1.6 &&
+              takerBuyPctTf >= 53 &&
+              netInflowTf > 0 &&
+              priceChangePctTf >= -0.5
+            ) {
+              suddenSpikes.push({
+                symbol: c.symbol,
+                currentPrice: lastK.close,
+                spikeRatio,
+                currentVol: volTf,
+                prevAvgVol: avgPrevVol,
+                takerBuyPct: takerBuyPctTf,
+                netInflowUsdt: netInflowTf,
+                priceChangePct: priceChangePctTf,
+              });
+            }
+          } catch {
+            // Bỏ qua lỗi 1 symbol riêng lẻ
+          }
         }),
       );
-
-      for (const res of batchResults) {
-        if (res) results.push(res);
-      }
     }
 
-    // Top Dòng tiền vào (Gom hàng 12h: Net Inflow > 0 và Taker Buy >= 50%)
-    const inflow = [...results]
-      .filter((r) => r.netInflowUsdt > 0 && r.takerBuyPct >= 50)
+    // Sắp xếp Đột biến theo tỷ lệ tăng vọt volume cao nhất, lấy đúng topLimit (20)
+    suddenSpikes.sort((a, b) => b.spikeRatio - a.spikeRatio);
+    const topSpikes = suddenSpikes.slice(0, topLimit);
+
+    // Top Dòng tiền vào (Gom ròng: Net Inflow > 0 và Taker Buy >= 51%), lấy đúng topLimit (20)
+    const inflow = [...allTfItems]
+      .filter((r) => r.netInflowUsdt > 0 && r.takerBuyPct >= 51)
       .sort((a, b) => b.netInflowUsdt - a.netInflowUsdt)
-      .slice(0, 10);
+      .slice(0, topLimit);
 
-    // Top Dòng tiền ra (Xả hàng / rút vốn 12h: Net Inflow < 0 và Taker Buy <= 50%)
-    const outflow = [...results]
-      .filter((r) => r.netInflowUsdt < 0 && r.takerBuyPct <= 50)
-      .sort((a, b) => a.netInflowUsdt - b.netInflowUsdt) // Âm nhiều nhất xếp đầu (lực xả lớn nhất)
-      .slice(0, 10);
+    // Top Dòng tiền ra (Xả ròng: Net Inflow < 0 và Taker Buy <= 49%), lấy đúng topLimit (20)
+    const outflow = [...allTfItems]
+      .filter((r) => r.netInflowUsdt < 0 && r.takerBuyPct <= 49)
+      .sort((a, b) => a.netInflowUsdt - b.netInflowUsdt) // Âm nhiều nhất xếp đầu
+      .slice(0, topLimit);
 
-    // Top Coin Lực Mua Mạnh Trong Nến 1 Ngày (1D) (bảo toàn logic cũ)
-    const strongDailyBuys = [...results]
-      .filter((r) => (r.dailyTakerBuyPct || 0) >= 58 && (r.dailyTakerBuyUsdt || 0) >= 3_000_000)
-      .sort((a, b) => (b.dailyTakerBuyUsdt || 0) - (a.dailyTakerBuyUsdt || 0))
-      .map((r) => ({
-        symbol: r.symbol,
-        takerBuyUsdt: r.dailyTakerBuyUsdt || 0,
-        priceChangePct: r.priceChangePct,
-        takerBuyPct: r.dailyTakerBuyPct || 50,
-      }))
-      .slice(0, 10);
-
-    return { btc: btcItem, inflow, outflow, strongDailyBuys };
+    return {
+      timeframeHours: tf,
+      topLimit,
+      btc: btcItem,
+      suddenSpikes: topSpikes,
+      inflow,
+      outflow,
+      sudden1hSpikes: tf === 1 ? topSpikes : [],
+      sudden1dSpikes: tf >= 24 ? topSpikes : [],
+    };
   }
 }
 
