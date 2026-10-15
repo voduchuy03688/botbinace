@@ -27,6 +27,7 @@ import { StructureFeatureSnapshot } from './types/structure.types.js';
 import { DerivativesMarketEngine } from './features/derivatives-market-engine.js';
 import { ScoringEngine } from './scoring/scoring-engine.js';
 import { DetectorOutput } from './types/detector-output.types.js';
+import { isEligibleTokenForAlert } from '../binance/token-chain.helper.js';
 
 @Injectable()
 export class DetectorService
@@ -110,13 +111,19 @@ export class DetectorService
   }
 
   /**
-   * Initializes streams for top active futures symbols.
+   * Initializes streams for active futures symbols with price < 0.5$ on ETH, BSC, and SOL.
    */
   async initializeStreams(): Promise<void> {
     try {
-      // Get active high liquidity symbols
-      const symbols = await this.binanceService.getActiveSymbolsByVolume();
-      const topPool = symbols.slice(0, 40); // Top 40 high volume tokens to monitor in real-time
+      // Get all tickers and filter to price < 0.5 and on ETH, BSC, SOL
+      const tickers = this.binanceService.getAllTickers24h();
+      const eligibleSymbols = tickers
+        .filter((t) => isEligibleTokenForAlert(t.symbol, t.lastPrice))
+        .sort((a, b) => b.quoteVolume - a.quoteVolume)
+        .slice(0, 45)
+        .map((t) => t.symbol);
+
+      const topPool = eligibleSymbols.length > 0 ? eligibleSymbols : ['1000PEPEUSDT', '1000BONKUSDT', 'WIFUSDT', 'BOMEUSDT', '1000FLOKIUSDT'];
 
       // Always include BTCUSDT for market regime evaluation
       if (!topPool.includes('BTCUSDT')) {
@@ -124,7 +131,7 @@ export class DetectorService
       }
 
       this.logger.log(
-        `Registering ${topPool.length} active symbols to Binance Realtime WebSocket streams...`,
+        `Registering ${topPool.length} active low-cap symbols (< $0.5 on ETH/BSC/SOL) to Binance Realtime WebSocket streams...`,
       );
 
       this.wsManager.subscribeSymbols(topPool);
@@ -300,7 +307,7 @@ export class DetectorService
 
         const tradeBuffer = this.ringBuffers.get(output.symbol);
         const currentPrice = tradeBuffer ? tradeBuffer.getLatestPrice() : 0;
-        if (currentPrice <= 0) continue;
+        if (currentPrice <= 0 || !isEligibleTokenForAlert(output.symbol, currentPrice)) continue;
 
         const agg = tradeBuffer
           ? tradeBuffer.getAggregatesForWindow(60_000, 10_000, now)
