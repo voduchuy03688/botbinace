@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { DetectorOutput } from '../detector/types/detector-output.types.js';
 import { CashflowReportData } from '../binance/binance.service.js';
+import {
+  getChainBadge,
+  isEligibleTokenForAlert,
+} from '../binance/token-chain.helper.js';
 
 export interface VipSpikeAlertPayload {
   signalTier?: 'CUC_NGON' | 'NGON';
@@ -202,16 +206,22 @@ export class TelegramService {
   }
 
   // =========================================================================
-  // THÔNG BÁO CỰC NGON (KÈM KHỐI LƯỢNG MUA) - SIÊU GỌN 2 DÒNG
+  // THÔNG BÁO TÍN HIỆU: CHUẨN BỊ BAY MẠNH (DỰ BÁO 1-2H TỚI BUNG SÓNG TO)
+  // Chỉ áp dụng cho token giá < 0.5$ và thuộc mạng ETH, BSC, SOL
   // =========================================================================
   async sendEarlyExpansionAlert(
     output: DetectorOutput,
     currentPrice: number,
     buyVol = 0,
   ): Promise<boolean> {
+    if (!isEligibleTokenForAlert(output.symbol, currentPrice)) {
+      return false;
+    }
+    const badge = getChainBadge(output.symbol);
     const binanceUrl = `https://www.binance.com/en/futures/${output.symbol}`;
-    const suggestedTp = currentPrice * 1.032;
-    const suggestedSl = currentPrice * 0.975;
+    const suggestedTp1 = currentPrice * 1.12; // Mục tiêu ăn miếng to +12%
+    const suggestedTp2 = currentPrice * 1.28; // Mục tiêu ăn miếng to +28%
+    const suggestedSl = currentPrice * 0.96;  // Cắt lỗ an toàn -4%
     const buyPct = Math.round(output.buyPressure * 100);
     const buyVolStr =
       buyVol >= 1_000_000
@@ -221,17 +231,23 @@ export class TelegramService {
           : '';
 
     const lines: string[] = [
-      `💎 <b>[CỰC NGON] #${output.symbol}</b> | Giá: <code>$${currentPrice}</code>`,
-      `🟢 Mua: <b>${buyVolStr ? buyVolStr + ' ' : ''}(${buyPct}%)</b> | TP: <code>$${suggestedTp.toFixed(4)}</code> | SL: <code>$${suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `🚀 <b>[CHUẨN BỊ BAY MẠNH] #${output.symbol}</b> ${badge} | Giá: <code>$${currentPrice}</code>`,
+      `🌊 <b>Dòng Tiền Bơm Bền Vững</b>: Mua <b>${buyVolStr ? buyVolStr + ' ' : ''}(${buyPct}%)</b> | Dự phóng bung sóng 1-2h tới!`,
+      `🎯 <b>Mục Tiêu Ăn Miếng To</b>: TP1 (+12%): <code>$${suggestedTp1.toFixed(4)}</code> | TP2 (+28%): <code>$${suggestedTp2.toFixed(4)}</code> | SL (-4%): <code>$${suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
-  // THÔNG BÁO TÍN HIỆU CỰC NGON (KÈM KHỐI LƯỢNG MUA) - SIÊU GỌN 2 DÒNG
+  // THÔNG BÁO TÍN HIỆU: BỨT PHÁ CHÂN SÓNG - DÒNG TIỀN VÀO LIÊN TỤC
+  // Chỉ áp dụng cho token giá < 0.5$ và thuộc mạng ETH, BSC, SOL
   // =========================================================================
   async sendVipSpikeAlert(payload: VipSpikeAlertPayload): Promise<boolean> {
+    if (!isEligibleTokenForAlert(payload.symbol, payload.currentPrice)) {
+      return false;
+    }
+    const badge = getChainBadge(payload.symbol);
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     const buyVol = payload.takerBuyVol1m || payload.netCashflow1m || 0;
     const buyVolStr =
@@ -239,35 +255,52 @@ export class TelegramService {
         ? `$${(buyVol / 1_000_000).toFixed(2)}M`
         : `$${Math.round(buyVol / 1000)}k`;
 
+    const tp1 = payload.suggestedTp1 || payload.currentPrice * 1.12;
+    const tp2 = payload.suggestedTp2 || payload.currentPrice * 1.28;
+    const sl = payload.suggestedSl || payload.currentPrice * 0.96;
+
     const lines: string[] = [
-      `💎 <b>[CỰC NGON] #${payload.symbol}</b> | Giá: <code>$${payload.currentPrice}</code>`,
-      `🟢 Mua: <b>${buyVolStr}</b> (${payload.takerBuyPct1m.toFixed(0)}%) | TP: <code>$${payload.suggestedTp1.toFixed(4)}</code> | SL: <code>$${payload.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `🚀 <b>[CHUẨN BỊ BAY MẠNH] #${payload.symbol}</b> ${badge} | Giá: <code>$${payload.currentPrice}</code>`,
+      `🌊 <b>Dòng Tiền Bơm Bền Vững</b>: Mua <b>${buyVolStr}</b> (${payload.takerBuyPct1m.toFixed(0)}%) | Chân sóng: <b>+${(payload.distanceFromFootPct || 0).toFixed(2)}%</b> | Vol x${(payload.volumeMultiplier || 1).toFixed(1)}`,
+      `🎯 <b>Mục Tiêu Ăn Miếng To (1-2h tới)</b>:`,
+      `• TP1 (+12%): <code>$${tp1.toFixed(4)}</code> | TP2 (+28%): <code>$${tp2.toFixed(4)}</code> | SL: <code>$${sl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
   }
 
   // =========================================================================
-  // THÔNG BÁO CỰC NGON - BẮT CHỈNH (KÈM KHỐI LƯỢNG MUA) - SIÊU GỌN 2 DÒNG
+  // THÔNG BÁO TÍN HIỆU: ĐÃ BAY & CHỈNH XONG - DÒNG TIỀN ĐỠ MẠNH (SÓNG 2)
+  // Chỉ áp dụng cho token giá < 0.5$ và thuộc mạng ETH, BSC, SOL
   // =========================================================================
   async sendPullbackDipAlert(data: {
     symbol: string;
     currentPrice: number;
     pullbackPct: number;
+    prePumpGain?: number;
     buyVolume: number;
     takerBuyPct: number;
     suggestedTp: number;
     suggestedSl: number;
   }): Promise<boolean> {
+    if (!isEligibleTokenForAlert(data.symbol, data.currentPrice)) {
+      return false;
+    }
+    const badge = getChainBadge(data.symbol);
     const binanceUrl = `https://www.binance.com/en/futures/${data.symbol}`;
     const buyVolStr =
       data.buyVolume >= 1_000_000
         ? `$${(data.buyVolume / 1_000_000).toFixed(2)}M`
         : `$${Math.round(data.buyVolume / 1000)}k`;
 
+    const preGainText = data.prePumpGain ? ` (Sóng trước +${data.prePumpGain.toFixed(1)}%)` : '';
+    const suggestedTp2 = data.currentPrice * 1.25;
+
     const lines: string[] = [
-      `💎 <b>[CỰC NGON - BẮT CHỈNH] #${data.symbol}</b> | Giá: <code>$${data.currentPrice}</code>`,
-      `🟢 Mua: <b>${buyVolStr}</b> (${data.takerBuyPct.toFixed(0)}%) | Chỉnh <b>-${data.pullbackPct.toFixed(1)}%</b> | TP: <code>$${data.suggestedTp.toFixed(4)}</code> | SL: <code>$${data.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `🔁 <b>[ĐÃ BAY & CHỈNH XONG - SÓNG 2] #${data.symbol}</b> ${badge} | Giá: <code>$${data.currentPrice}</code>`,
+      `🌊 <b>Dòng Tiền Giao Dịch Đỡ Mạnh</b>: Đã chỉnh <b>-${data.pullbackPct.toFixed(1)}%</b>${preGainText} | Mua gom: <b>${buyVolStr}</b> (${data.takerBuyPct.toFixed(0)}%) | Rút chân đỡ giá`,
+      `🎯 <b>Mục Tiêu Sóng 2 (Vài tiếng tới)</b>:`,
+      `• TP1 (+12%): <code>$${data.suggestedTp.toFixed(4)}</code> | TP2 (+25%): <code>$${suggestedTp2.toFixed(4)}</code> | SL: <code>$${data.suggestedSl.toFixed(4)}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     ];
 
     return this.sendMessage(lines.join('\n'));
@@ -277,9 +310,10 @@ export class TelegramService {
   // THÔNG BÁO CHỐT LỜI TP1 / TP2 (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendTakeProfitAlert(payload: TakeProfitAlertPayload): Promise<boolean> {
+    const badge = getChainBadge(payload.symbol);
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     return this.sendMessage(
-      `💰 <b>[${payload.targetLevel}] #${payload.symbol} (+${payload.profitPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `💰 <b>[${payload.targetLevel}] #${payload.symbol} ${badge} (+${payload.profitPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     );
   }
 
@@ -287,30 +321,22 @@ export class TelegramService {
   // THÔNG BÁO DỪNG LỖ / BẢO TOÀN VỐN (1 DÒNG TỐI GIẢN)
   // =========================================================================
   async sendStopLossAlert(payload: StopLossAlertPayload): Promise<boolean> {
+    const badge = getChainBadge(payload.symbol);
     const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
     return this.sendMessage(
-      `🛑 <b>[SL] #${payload.symbol} (${payload.lossPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
+      `🛑 <b>[SL] #${payload.symbol} ${badge} (${payload.lossPct.toFixed(2)}%)</b> | Giá: <code>$${payload.currentPrice}</code> | <a href="${binanceUrl}">Binance ↗</a>`,
     );
   }
 
   // =========================================================================
-  // THÔNG BÁO HẾT NGON (KÈM KHỐI LƯỢNG BÁN) - SIÊU GỌN 2 DÒNG
+  // TRIỆT ĐỂ VÔ HIỆU HÓA CẢNH BÁO "HẾT NGON" 1-2 PHÚT
+  // Để tránh tình trạng người dùng vừa vào lệnh đã bị hoảng loạn cắt non và tốn phí
   // =========================================================================
   async sendHetNgonMultiCandleAlert(payload: HetNgonAlertPayload): Promise<boolean> {
-    const binanceUrl = `https://www.binance.com/en/futures/${payload.symbol}`;
-    const pnlSign = payload.profitPct >= 0 ? '+' : '';
-    const sellVol = payload.netCashflowSell || 0;
-    const sellVolStr =
-      sellVol >= 1_000_000
-        ? `$${(sellVol / 1_000_000).toFixed(2)}M`
-        : `$${Math.round(sellVol / 1000)}k`;
-
-    const lines: string[] = [
-      `🛑 <b>[HẾT NGON] #${payload.symbol}</b> | Giá: <code>$${payload.currentPrice}</code> (${pnlSign}${payload.profitPct.toFixed(2)}%)`,
-      `🔴 Bán: <b>${sellVolStr}</b> (${payload.takerSellPct.toFixed(0)}%) | <a href="${binanceUrl}">Binance ↗</a>`,
-    ];
-
-    return this.sendMessage(lines.join('\n'));
+    this.logger.log(
+      `[TẮT CẢNH BÁO HẾT NGON 1-2 PHÚT] #${payload.symbol} -> Bỏ qua cảnh báo ngắn hạn, để lệnh tiếp tục gồng theo sóng lớn.`,
+    );
+    return true;
   }
 
   // =========================================================================
@@ -375,8 +401,9 @@ export class TelegramService {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
         const pattern = item.accumulationPattern ? ` [<b>${item.accumulationPattern}</b>]` : '';
+        const badge = item.chainBadge || getChainBadge(item.symbol);
         part1Lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>x${item.spikeRatio.toFixed(1)} Vol</b>${pattern}`,
+          `${index + 1}. <b>#${item.symbol}</b> ${badge}: <b>x${item.spikeRatio.toFixed(1)} Vol</b>${pattern}`,
           `   • Vol: <b>${formatMoney(item.currentVol)}</b> (Nền cũ: ${formatMoney(item.prevAvgVol)}) | Mua: <b>${item.takerBuyPct.toFixed(0)}%</b> (+<b>${formatMoney(item.netInflowUsdt)}</b>) | Giá: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
@@ -395,8 +422,9 @@ export class TelegramService {
       data.inflow.slice(0, topLimit).forEach((item, index) => {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
+        const badge = item.chainBadge || getChainBadge(item.symbol);
         part2Lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>+${formatMoney(item.netInflowUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+          `${index + 1}. <b>#${item.symbol}</b> ${badge}: <b>+${formatMoney(item.netInflowUsdt)}</b> (Mua: ${item.takerBuyPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
     }
@@ -410,8 +438,9 @@ export class TelegramService {
         const sign = item.priceChangePct >= 0 ? '+' : '';
         const url = `https://www.binance.com/en/futures/${item.symbol}`;
         const sellPct = 100 - item.takerBuyPct;
+        const badge = item.chainBadge || getChainBadge(item.symbol);
         part2Lines.push(
-          `${index + 1}. <b>#${item.symbol}</b>: <b>-${formatMoney(item.netInflowUsdt)}</b> (Bán: ${sellPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
+          `${index + 1}. <b>#${item.symbol}</b> ${badge}: <b>-${formatMoney(item.netInflowUsdt)}</b> (Bán: ${sellPct.toFixed(0)}%) | Vol: ${formatMoney(item.volumeUsdt)} | ${tfLabel}: <b>${sign}${item.priceChangePct.toFixed(1)}%</b> | <a href="${url}">Xem ↗</a>`,
         );
       });
     }

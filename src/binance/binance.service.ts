@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import {
+  getChainBadge,
+  isEligibleTokenForAlert,
+  isPriceUnderHalfDollar,
+  isTargetChain,
+} from './token-chain.helper.js';
 
 export interface KlineData {
   openTime: number;
@@ -34,6 +40,7 @@ export interface TickerVelocityData {
 
 export interface CashflowReportItem {
   symbol: string;
+  chainBadge?: string;
   netInflowUsdt: number;
   volumeUsdt: number;
   priceChangePct: number;
@@ -65,6 +72,7 @@ export interface BtcCashflowSummary {
 
 export interface VolumeSpikeItem {
   symbol: string;
+  chainBadge?: string;
   currentPrice: number;
   spikeRatio: number;      // Tỷ lệ tăng đột biến (ví dụ x5.2 lần)
   currentVol: number;      // Khối lượng USDT chu kỳ hiện tại
@@ -239,6 +247,18 @@ export class BinanceService {
     });
   }
 
+  // Lấy toàn bộ danh sách coin hợp lệ theo tiêu chí khắt khe: Giá < 0.5$ và thuộc mạng ETH, BSC, SOL (vốn hóa nhỏ / meme / pump dump)
+  getTargetMoversPool(minVol = 300_000, min24hChange = -30.0, max24hChange = 80.0): Ticker24hData[] {
+    return Array.from(this.ticker24hMap.values()).filter((t) => {
+      return (
+        isEligibleTokenForAlert(t.symbol, t.lastPrice) &&
+        t.quoteVolume >= minVol &&
+        t.priceChangePercent >= min24hChange &&
+        t.priceChangePercent <= max24hChange
+      );
+    });
+  }
+
   // Lọc nhanh các token đang nằm trong VÙNG ĐÁY TÍCH LŨY (Bottom Zone)
   getBottomZoneCandidates(
     maxBottomPct = 38,
@@ -381,10 +401,10 @@ export class BinanceService {
     }
 
     // 2. Lấy danh sách toàn bộ altcoins hợp lệ để quét đột biến thanh khoản & gom hàng
+    // LỌC NGHIÊM NGẶT: Giá < 0.5$ và thuộc mạng ETH, BSC, SOL (vốn hóa nhỏ / meme / pump dump mạnh)
     const candidates = Array.from(this.ticker24hMap.values()).filter((t) => {
       if (!t.symbol || !t.symbol.endsWith('USDT')) return false;
-      if (EXCLUDED_NON_CRYPTO_SYMBOLS.has(t.symbol)) return false;
-      return t.quoteVolume >= 150_000 && t.quoteVolume <= 600_000_000;
+      return isEligibleTokenForAlert(t.symbol, t.lastPrice) && t.quoteVolume >= 80_000;
     });
 
     const suddenSpikes: VolumeSpikeItem[] = [];
@@ -417,8 +437,11 @@ export class BinanceService {
             const priceChangePctTf =
               firstK.open > 0 ? ((lastK.close - firstK.open) / firstK.open) * 100 : 0;
 
+            const chainBadge = getChainBadge(c.symbol);
+
             allTfItems.push({
               symbol: c.symbol,
+              chainBadge,
               netInflowUsdt: netInflowTf,
               volumeUsdt: volTf,
               priceChangePct: priceChangePctTf,
@@ -460,6 +483,7 @@ export class BinanceService {
 
               suddenSpikes.push({
                 symbol: c.symbol,
+                chainBadge,
                 currentPrice: lastK.close,
                 spikeRatio,
                 currentVol: volTf,
